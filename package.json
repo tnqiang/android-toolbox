@@ -36,34 +36,46 @@
     "vite-plugin-electron-renderer": "^0.14.6"
   },
   "build": {
-    "appId": "com.apkinstallhelper.app",
-    "productName": "ApkInstallHelper",
+    "appId": "com.mobilehelper.app",
+    "productName": "手机助手",
     "directories": {
       "output": "release"
     },
     "files": [
       "dist",
       "dist-electron",
-      "resources"
-    ],
-    "extraResources": [
-      {
-        "from": "resources/adb/${platform}",
-        "to": "adb"
-      }
+      "resources/icon.ico",
+      "resources/icon.icns",
+      "resources/icon/**"
     ],
     "win": {
       "target": "nsis",
-      "icon": "resources/icon.ico"
+      "icon": "resources/icon.ico",
+      "extraResources": [
+        { "from": "resources/adb/windows", "to": "adb" }
+      ]
     },
     "mac": {
       "target": "dmg",
       "icon": "resources/icon.icns",
-      "category": "public.app-category.utilities"
+      "category": "public.app-category.utilities",
+      "extraResources": [
+        { "from": "resources/adb/macos", "to": "adb" }
+      ]
+    },
+    "linux": {
+      "target": "AppImage",
+      "icon": "resources/icon/icon.png",
+      "extraResources": [
+        { "from": "resources/adb/linux", "to": "adb" }
+      ]
     },
     "nsis": {
       "oneClick": false,
-      "allowToChangeInstallationDirectory": true
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "手机助手"
     }
   }
 }

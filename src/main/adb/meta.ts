@@ -223,7 +223,8 @@ export async function getAppMeta(
     // 2. pull 到临时文件（60 秒超时，大 APK 可能较慢）
     const localApk = join(TMP_DIR, `${packageName}_${Date.now()}.apk`);
     try {
-      const transfer = await withTimeout(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const transfer: any = await withTimeout(
         device.pull(apkPathOnDevice),
         60000,
         `pull ${apkPathOnDevice}`,
