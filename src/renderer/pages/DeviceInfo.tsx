@@ -249,8 +249,6 @@ export default function DeviceInfoPage() {
             <InfoRow label="状态" value={battery.status} />
             <InfoRow label="健康" value={battery.health} />
             <InfoRow label="温度" value={battery.temperature != null ? `${battery.temperature.toFixed(1)}°C` : undefined} />
-            <InfoRow label="电压" value={battery.voltage ? `${battery.voltage} mV` : undefined} />
-            <InfoRow label="类型" value={battery.technology} />
           </div>
 
           <div className="di-card di-storage-card">

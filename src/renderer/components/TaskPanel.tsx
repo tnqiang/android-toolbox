@@ -1,8 +1,9 @@
-import { Progress, Button, Empty } from 'antd';
+import { Progress, Button, Empty, Tooltip, App as AntdApp } from 'antd';
 import {
   CloseOutlined, CheckCircleFilled, CloseCircleFilled,
-  DownOutlined, UpOutlined, DeleteOutlined,
+  DownOutlined, UpOutlined, DeleteOutlined, CopyOutlined,
 } from '@ant-design/icons';
+import { useEffect, useRef } from 'react';
 import { useTaskStore, type InstallTask } from '../store/useTaskStore';
 
 function stageLabel(stage: string): string {
@@ -17,6 +18,15 @@ function stageLabel(stage: string): string {
 }
 
 function TaskRow({ task }: { task: InstallTask }) {
+  const { message } = AntdApp.useApp();
+  const copyError = () => {
+    if (!task.error) return;
+    navigator.clipboard.writeText(task.error).then(
+      () => message.success('已复制错误信息'),
+      () => message.error('复制失败'),
+    );
+  };
+
   return (
     <div className="task-row">
       <div className="task-row-top">
@@ -39,7 +49,20 @@ function TaskRow({ task }: { task: InstallTask }) {
         showInfo={task.status === 'installing'}
       />
       {task.error && (
-        <div className="task-error" title={task.error}>{task.error}</div>
+        <div className="task-error-box">
+          <div className="task-error-head">
+            <span className="task-error-title">错误详情</span>
+            <Tooltip title="复制错误信息">
+              <Button
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                onClick={copyError}
+              />
+            </Tooltip>
+          </div>
+          <pre className="task-error-text">{task.error}</pre>
+        </div>
       )}
     </div>
   );
@@ -50,6 +73,18 @@ export default function TaskPanel() {
   const panelOpen = useTaskStore((s) => s.panelOpen);
   const setPanelOpen = useTaskStore((s) => s.setPanelOpen);
   const clearFinished = useTaskStore((s) => s.clearFinished);
+
+  // 新出现的 failed 任务：自动展开 panel 让用户立即看到错误
+  const lastFailedIdsRef = useRef(new Set<string>());
+  useEffect(() => {
+    const nowFailed = new Set(tasks.filter((t) => t.status === 'failed').map((t) => t.id));
+    let hasNew = false;
+    for (const id of nowFailed) {
+      if (!lastFailedIdsRef.current.has(id)) { hasNew = true; break; }
+    }
+    lastFailedIdsRef.current = nowFailed;
+    if (hasNew) setPanelOpen(true);
+  }, [tasks, setPanelOpen]);
 
   if (tasks.length === 0) return null;
 

@@ -65,9 +65,12 @@ export async function listDir(deviceId: string, remotePath: string): Promise<Rem
   const client = getAdbClient();
   const device = client.getDevice(deviceId);
   const path = normalizeRemote(remotePath) || '/';
+  const t0 = Date.now();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const entries: any[] = await withTimeout(device.readdir(path), 20000, `readdir ${path}`);
-  return entries
+  const tReaddir = Date.now() - t0;
+  const t1 = Date.now();
+  const result = entries
     .map((e) => {
       // adbkit Entry: { name, mode, size, mtime (Date) }
       const mode = Number(e.mode ?? 0);
@@ -91,6 +94,128 @@ export async function listDir(deviceId: string, remotePath: string): Promise<Rem
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
+  const tProcess = Date.now() - t1;
+  // eslint-disable-next-line no-console
+  console.log(`[fs] listDir ${path}: ${result.length} entries, readdir=${tReaddir}ms, process=${tProcess}ms`);
+  return result;
+}
+
+/**
+ * 流式列目录：边收 DENT 边触发 onChunk 回调，避免大目录长时间空白
+ *
+ * 实现思路：
+ *   adbkit 的 sync.readdir 内部循环读 DENT 包，但只在全部读完后 resolve。
+ *   这里直接用 Sync 的 private parser 自己实现读循环，每解析一条立即累积，
+ *   每隔 flushIntervalMs 或 flushBatchSize 条触发一次 onChunk。
+ *
+ * 返回：完整的 entries 列表（用于最终一致性确认）
+ */
+export async function listDirStreaming(
+  deviceId: string,
+  remotePath: string,
+  onChunk: (chunk: RemoteEntry[]) => void,
+  options: {
+    flushIntervalMs?: number;   // 至少多久 flush 一次（默认 80ms）
+    flushBatchSize?: number;    // 攒到多少条强制 flush（默认 500）
+    cancelToken?: { cancelled: boolean }; // 外部取消标志
+  } = {},
+): Promise<RemoteEntry[]> {
+  const flushIntervalMs = options.flushIntervalMs ?? 80;
+  const flushBatchSize = options.flushBatchSize ?? 500;
+  const path = normalizeRemote(remotePath) || '/';
+
+  const client = getAdbClient();
+  const device = client.getDevice(deviceId);
+  const t0 = Date.now();
+
+  // 拿到底层 Sync 实例（adbkit 私有，但运行时可访问）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sync: any = await withTimeout(device.syncService(), 10000, `syncService ${path}`);
+
+  // 加载 protocol 常量（DENT/DONE/FAIL/LIST）
+  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+  const ProtocolMod = require('@devicefarmer/adbkit/dist/src/adb/protocol');
+  const Protocol = ProtocolMod.default ?? ProtocolMod;
+
+  const all: RemoteEntry[] = [];
+  let pending: RemoteEntry[] = [];
+  let lastFlush = Date.now();
+  let firstByteAt = 0;
+
+  const doFlush = () => {
+    if (pending.length === 0) return;
+    const out = pending;
+    pending = [];
+    lastFlush = Date.now();
+    try { onChunk(out); } catch { /* ignore */ }
+  };
+
+  try {
+    // 发送 LIST 命令
+    sync._sendCommandWithArg(Protocol.LIST, path);
+    const parser = sync.parser;
+
+    // 循环读 DENT
+    // 协议：DENT(4) + mode(4) + size(4) + mtime(4) + namelen(4) + name(namelen)
+    //       DONE(4) + 16 bytes padding
+    //       FAIL(4) + msglen(4) + msg
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      if (options.cancelToken?.cancelled) {
+        // eslint-disable-next-line no-console
+        console.log(`[fs] listDirStreaming ${path}: cancelled at ${all.length}`);
+        break;
+      }
+      const reply: string = await parser.readAscii(4);
+      if (reply === Protocol.DENT) {
+        const stat: Buffer = await parser.readBytes(16);
+        const mode = stat.readUInt32LE(0);
+        const size = stat.readUInt32LE(4);
+        const mtime = stat.readUInt32LE(8);
+        const namelen = stat.readUInt32LE(12);
+        const nameBuf: Buffer = await parser.readBytes(namelen);
+        const name = nameBuf.toString();
+        if (name === '.' || name === '..') continue;
+        if (firstByteAt === 0) firstByteAt = Date.now() - t0;
+
+        const isDir = (mode & 0o170000) === 0o040000;
+        const isSymlink = (mode & 0o170000) === 0o120000;
+        const entry: RemoteEntry = {
+          name, isDir, isSymlink,
+          size,
+          mtimeMs: mtime * 1000,
+          mode,
+        };
+        all.push(entry);
+        pending.push(entry);
+
+        // 周期/批量 flush
+        if (pending.length >= flushBatchSize ||
+            Date.now() - lastFlush >= flushIntervalMs) {
+          doFlush();
+        }
+      } else if (reply === Protocol.DONE) {
+        await parser.readBytes(16); // 吃掉 padding
+        break;
+      } else if (reply === Protocol.FAIL) {
+        const lenBuf: Buffer = await parser.readBytes(4);
+        const len = lenBuf.readUInt32LE(0);
+        const msgBuf: Buffer = await parser.readBytes(len);
+        throw new Error(msgBuf.toString());
+      } else {
+        throw new Error(`unexpected reply: ${reply}`);
+      }
+    }
+  } finally {
+    doFlush();
+    try { sync.end(); } catch { /* ignore */ }
+  }
+
+  // eslint-disable-next-line no-console
+  console.log(
+    `[fs] listDirStreaming ${path}: ${all.length} entries, total=${Date.now() - t0}ms, firstByte=${firstByteAt}ms`,
+  );
+  return all;
 }
 
 /**

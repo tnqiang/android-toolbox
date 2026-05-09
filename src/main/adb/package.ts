@@ -320,14 +320,21 @@ export async function installApk(
       clearInterval(tick);
       const output = (stdoutBuf + '\n' + stderrBuf).trim();
       // eslint-disable-next-line no-console
-      console.log(`[install] done code=${code} output=${output.slice(0, 200)}`);
+      console.log(`[install] done code=${code} output=${output.slice(0, 500)}`);
       if (code === 0 && /Success/i.test(output)) {
         stage = 'done';
         percent = 100;
         onProgress?.({ stage, percent });
         resolve();
       } else {
-        reject(new Error(output || `adb install exited with code ${code}`));
+        // 拼出一个信息量充足的错误：命令 + 退出码 + 原始输出
+        const cmd = `${adb} ${args.join(' ')}`;
+        const parts = [
+          `adb install 失败 (exit=${code})`,
+          `命令: ${cmd}`,
+          output ? `输出:\n${output}` : '（adb 未输出任何内容）',
+        ];
+        reject(new Error(parts.join('\n')));
       }
     });
   });

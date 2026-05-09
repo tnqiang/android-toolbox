@@ -80,6 +80,41 @@ export default function FileBrowserDrawer({
   const [err, setErr] = useState<string>('');
   const [dragOver, setDragOver] = useState(false);
 
+  // 表格容器高度：virtual 模式必须是明确的 px 数字
+  const tableWrapRef = useRef<HTMLDivElement>(null);
+  const [tableBodyHeight, setTableBodyHeight] = useState<number>(0);
+  const lastHeightRef = useRef(0);
+  const computeTableHeight = useCallback(() => {
+    const el = tableWrapRef.current;
+    if (!el) return;
+    const h = el.clientHeight - 48; // 减表头
+    if (h > 0 && h !== lastHeightRef.current) {
+      lastHeightRef.current = h;
+      setTableBodyHeight(h);
+    }
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const el = tableWrapRef.current;
+    if (!el) return;
+    computeTableHeight();
+    const raf = requestAnimationFrame(computeTableHeight);
+    const ro = new ResizeObserver(computeTableHeight);
+    ro.observe(el);
+    window.addEventListener('resize', computeTableHeight);
+    return () => {
+      cancelAnimationFrame(raf);
+      ro.disconnect();
+      window.removeEventListener('resize', computeTableHeight);
+    };
+  }, [open, computeTableHeight]);
+
+  // 数据/错误态切换时再触发一次测量（错误态的 Empty 与 Table 高度不同）
+  useEffect(() => {
+    const raf = requestAnimationFrame(computeTableHeight);
+    return () => cancelAnimationFrame(raf);
+  }, [entries.length, err, computeTableHeight]);
+
   // 每次 open 或 initialPath 变化时重置 cwd
   const openedRef = useRef(false);
   useEffect(() => {
@@ -88,23 +123,87 @@ export default function FileBrowserDrawer({
       setCwd(norm(initialPath) || '/');
       setSelectedKeys([]);
     }
-    if (!open) openedRef.current = false;
+    if (!open) {
+      openedRef.current = false;
+      // 关闭时取消正在进行的 list
+      if (currentListRef.current) {
+        try { currentListRef.current.cancel(); } catch { /* ignore */ }
+        currentListRef.current = null;
+      }
+    }
   }, [open, initialPath]);
 
+  // 当前活跃的列目录请求；切目录/关闭抽屉时调 cancel() 避免上一次的 chunk 串到新目录
+  const currentListRef = useRef<{ cancel: () => void } | null>(null);
+
   const refresh = useCallback(async (path: string) => {
+    // 取消旧请求
+    if (currentListRef.current) {
+      try { currentListRef.current.cancel(); } catch { /* ignore */ }
+      currentListRef.current = null;
+    }
+
     setLoading(true);
     setErr('');
-    try {
-      const r = await window.api.fsList(deviceId, path);
-      if (!r.ok) {
-        setErr(r.error || '读取失败');
+    // 立即清空旧目录数据，避免上一目录的内容残留视觉
+    setEntries([]);
+    setSelectedKeys([]);
+
+    const t0 = performance.now();
+    let firstChunkAt = 0;
+    let received = 0;
+
+    // 累积式更新：合并 chunk -> 80ms 节流 setState
+    let pendingPatch: RemoteEntry[] = [];
+    let flushTimer: ReturnType<typeof setTimeout> | null = null;
+    const flush = () => {
+      flushTimer = null;
+      if (pendingPatch.length === 0) return;
+      const add = pendingPatch;
+      pendingPatch = [];
+      setEntries((prev) => {
+        // 合并 + 排序：目录优先 + 名称
+        const merged = prev.concat(add);
+        merged.sort((a, b) => {
+          if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+          return a.name.localeCompare(b.name);
+        });
+        return merged;
+      });
+    };
+    const scheduleFlush = () => {
+      if (flushTimer != null) return;
+      flushTimer = setTimeout(flush, 80);
+    };
+
+    const stream = window.api.fsListStream(deviceId, path, (msg) => {
+      if (msg.kind === 'chunk') {
+        if (firstChunkAt === 0) {
+          firstChunkAt = performance.now() - t0;
+          // eslint-disable-next-line no-console
+          console.log(`[fb] first chunk ${path} after ${firstChunkAt.toFixed(0)}ms (${msg.entries.length} items)`);
+        }
+        received += msg.entries.length;
+        pendingPatch.push(...msg.entries);
+        scheduleFlush();
+      } else if (msg.kind === 'end') {
+        if (flushTimer) clearTimeout(flushTimer);
+        flush();
+        setLoading(false);
+        currentListRef.current = null;
+        // eslint-disable-next-line no-console
+        console.log(
+          `[fb] list ${path}: ${received} entries, total=${(performance.now() - t0).toFixed(0)}ms, firstChunk=${firstChunkAt.toFixed(0)}ms`,
+        );
+      } else if (msg.kind === 'error') {
+        if (flushTimer) clearTimeout(flushTimer);
+        setErr(msg.error || '读取失败');
         setEntries([]);
-      } else {
-        setEntries(r.data ?? []);
+        setLoading(false);
+        currentListRef.current = null;
       }
-    } finally {
-      setLoading(false);
-    }
+    });
+    currentListRef.current = stream;
   }, [deviceId]);
 
   useEffect(() => {
@@ -299,6 +398,8 @@ export default function FileBrowserDrawer({
       title: '名称',
       dataIndex: 'name',
       key: 'name',
+      width: 520,
+      ellipsis: true,
       sorter: (a, b) => {
         if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
         return a.name.localeCompare(b.name);
@@ -409,7 +510,10 @@ export default function FileBrowserDrawer({
       </div>
 
       {/* 主体列表 */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}>
+      <div
+        ref={tableWrapRef}
+        style={{ flex: 1, minHeight: 0, overflow: 'hidden', position: 'relative' }}
+      >
         {err ? (
           <div style={{ padding: 24 }}>
             <Empty
@@ -425,13 +529,14 @@ export default function FileBrowserDrawer({
           </div>
         ) : (
           <Table<RemoteEntry>
+            virtual
             rowKey="name"
             dataSource={entries}
             columns={columns}
             loading={loading}
             size="middle"
             pagination={false}
-            scroll={{ y: 'calc(100vh - 280px)' }}
+            scroll={{ y: tableBodyHeight > 0 ? tableBodyHeight : 400, x: 800 }}
             rowSelection={{
               selectedRowKeys: selectedKeys,
               onChange: setSelectedKeys,

@@ -385,10 +385,20 @@ export default function AppsPage() {
       if (res.ok) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const failed = (res.data as any[]).filter((x) => !x.ok);
-        if (failed.length > 0) message.warning(`部分失败：${failed.length} 个`);
+        if (failed.length > 0) {
+          message.warning({
+            content: `${failed.length} 个 APK 安装失败，详情请查看右下角任务面板`,
+            duration: 6,
+          });
+          useTaskStore.getState().setPanelOpen(true);
+        }
         refresh();
       } else {
-        message.error(`安装失败：${res.error}`);
+        message.error({
+          content: `安装失败：${res.error}（详情请查看右下角任务面板）`,
+          duration: 6,
+        });
+        useTaskStore.getState().setPanelOpen(true);
       }
     });
   };
