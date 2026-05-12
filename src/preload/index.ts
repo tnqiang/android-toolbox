@@ -114,6 +114,48 @@ const api = {
   // ---- 文件浏览器 ----
   fsList: (deviceId: string, path: string): Promise<IpcResult<RemoteEntry[]>> =>
     ipcRenderer.invoke(IpcChannels.FS_LIST, deviceId, path),
+
+  /** 流式列目录：onChunk 持续触发 chunk/end/error 事件；返回 cancel 句柄 */
+  fsListStream: (
+    deviceId: string,
+    path: string,
+    onChunk: (msg:
+      | { kind: 'chunk'; entries: RemoteEntry[] }
+      | { kind: 'end'; total: number }
+      | { kind: 'error'; error: string }
+    ) => void,
+  ): { cancel: () => void; done: Promise<IpcResult<{ total: number }>> } => {
+    const requestId = `ls_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const handler = (
+      _e: unknown,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      msg: any,
+    ) => {
+      if (!msg || msg.requestId !== requestId) return;
+      if (msg.kind === 'chunk') {
+        onChunk({ kind: 'chunk', entries: msg.entries });
+      } else if (msg.kind === 'end') {
+        onChunk({ kind: 'end', total: msg.total });
+        ipcRenderer.removeListener(IpcChannels.FS_LIST_STREAM_CHUNK, handler);
+      } else if (msg.kind === 'error') {
+        onChunk({ kind: 'error', error: msg.error });
+        ipcRenderer.removeListener(IpcChannels.FS_LIST_STREAM_CHUNK, handler);
+      }
+    };
+    ipcRenderer.on(IpcChannels.FS_LIST_STREAM_CHUNK, handler);
+
+    const done = ipcRenderer.invoke(
+      IpcChannels.FS_LIST_STREAM, deviceId, path, requestId,
+    ) as Promise<IpcResult<{ total: number }>>;
+
+    return {
+      cancel: () => {
+        ipcRenderer.removeListener(IpcChannels.FS_LIST_STREAM_CHUNK, handler);
+        ipcRenderer.invoke(IpcChannels.FS_LIST_STREAM_CANCEL, requestId);
+      },
+      done,
+    };
+  },
   fsProbe: (deviceId: string, path: string): Promise<IpcResult<'dir' | 'file' | 'notfound' | 'denied'>> =>
     ipcRenderer.invoke(IpcChannels.FS_PROBE, deviceId, path),
   fsMkdir: (deviceId: string, path: string): Promise<IpcResult<true>> =>

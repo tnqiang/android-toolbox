@@ -10,7 +10,7 @@ import { getAppMeta, getAppMetaBatch, precacheMetaFromLocalApk } from './meta';
 import { getDeviceDetailInfo, rebootDevice, powerOffDevice, takeScreenshot } from './deviceInfo';
 import { getDeviceAppUsage, getPcInteractScores, getPcInstallTimes, recordInteract, type InteractKind } from './usage';
 import {
-  listDir, pullFile, pushFile, mkdirRemote, removeRemote, renameRemote,
+  listDir, listDirStreaming, pullFile, pushFile, mkdirRemote, removeRemote, renameRemote,
   probeRemote, joinRemote,
 } from './fs';
 import { basename, join as joinPath } from 'path';
@@ -107,9 +107,11 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
         // —— 安装前：本地解析 APK 预写 meta 缓存（label/icon/packageName/versionCode）——
         // 这样装完后列表刷新时就能直接命中缓存，不需要再 adb pull 回来
         let precachedPkg: string | undefined;
+        let precachedVc: number | undefined;
         try {
           const pre = await precacheMetaFromLocalApk(apk);
           precachedPkg = pre.packageName;
+          precachedVc = pre.versionCode;
         } catch { /* ignore */ }
 
         win?.webContents.send(IpcChannels.APP_INSTALL_PROGRESS, {
@@ -125,7 +127,7 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
               stage: info.stage,
               packageName: precachedPkg,
             });
-          });
+          }, precachedPkg, precachedVc);
           results.push({ apk, ok: true, packageName: precachedPkg });
           // —— 安装后：apkPath 已改变，旧 detail 缓存失效，清掉 ——
           if (precachedPkg) clearDetailCacheForPackage(precachedPkg);
@@ -205,6 +207,53 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
   ipcMain.handle(IpcChannels.FS_LIST, async (_e, deviceId: string, path: string) => {
     try { return ok(await listDir(deviceId, path)); } catch (e) { return fail(e); }
   });
+
+  // 维护流式 list 的取消标志，按 requestId 索引
+  const listStreamCancelTokens = new Map<string, { cancelled: boolean }>();
+
+  ipcMain.handle(IpcChannels.FS_LIST_STREAM_CANCEL, async (_e, requestId: string) => {
+    const t = listStreamCancelTokens.get(requestId);
+    if (t) t.cancelled = true;
+    return ok(true);
+  });
+
+  ipcMain.handle(
+    IpcChannels.FS_LIST_STREAM,
+    async (e, deviceId: string, path: string, requestId: string) => {
+      const win = BrowserWindow.fromWebContents(e.sender);
+      const cancelToken = { cancelled: false };
+      listStreamCancelTokens.set(requestId, cancelToken);
+      try {
+        const all = await listDirStreaming(
+          deviceId,
+          path,
+          (chunk) => {
+            if (cancelToken.cancelled) return;
+            win?.webContents.send(IpcChannels.FS_LIST_STREAM_CHUNK, {
+              requestId, kind: 'chunk', entries: chunk,
+            });
+          },
+          { cancelToken },
+        );
+        if (!cancelToken.cancelled) {
+          win?.webContents.send(IpcChannels.FS_LIST_STREAM_CHUNK, {
+            requestId, kind: 'end', total: all.length,
+          });
+        }
+        return ok({ total: all.length });
+      } catch (err) {
+        if (!cancelToken.cancelled) {
+          win?.webContents.send(IpcChannels.FS_LIST_STREAM_CHUNK, {
+            requestId, kind: 'error',
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return fail(err);
+      } finally {
+        listStreamCancelTokens.delete(requestId);
+      }
+    }
+  );
 
   ipcMain.handle(IpcChannels.FS_PROBE, async (_e, deviceId: string, path: string) => {
     try { return ok(await probeRemote(deviceId, path)); } catch (e) { return fail(e); }

@@ -87,6 +87,29 @@ async function shellExec(deviceId: string, cmd: string, timeoutMs = 15000): Prom
 }
 
 /**
+ * 读取设备上某个包的当前状态（用于 install 前后比对）
+ *   installed：true/false
+ *   versionCode：从 dumpsys 抓到的 versionCode（可能为 undefined）
+ *   lastUpdateTime：dumpsys 里的最后更新时间字符串（用于覆盖安装前后比对）
+ */
+async function readPackageBaseline(
+  deviceId: string,
+  packageName: string,
+): Promise<{ installed: boolean; versionCode?: number; lastUpdateTime?: string }> {
+  // pm path 是最快的存在性判定
+  const pmOut = await shellExec(deviceId, `pm path ${packageName}`, 8000);
+  const installed = /^package:.+\.apk/m.test(pmOut);
+  if (!installed) return { installed: false };
+
+  // 取 versionCode + lastUpdateTime
+  const dump = await shellExec(deviceId, `dumpsys package ${packageName}`, 10000);
+  const vcStr = dump.match(/versionCode=(\d+)/)?.[1];
+  const versionCode = vcStr ? Number(vcStr) : undefined;
+  const lastUpdateTime = dump.match(/lastUpdateTime=([^\r\n]+)/)?.[1]?.trim();
+  return { installed: true, versionCode, lastUpdateTime };
+}
+
+/**
  * 列出已安装应用（一次性拉全部，同时拿到系统应用名单，前端再按 isSystem 分类）
  *  -f 含 APK 路径  -s 仅系统（用来准确判定 isSystem）
  */
@@ -235,11 +258,20 @@ export async function getAllAppDataSizes(deviceId: string): Promise<Record<strin
  * - adbkit 3.x 的 install 走 bluebird Promise 链，在大 APK (>500MB) 上会 hang 住
  * - child_process 直接调 adb 命令行，等同终端执行，可靠且支持进度
  * - onProgress 回调：按"APK 字节数 + 推断速度"估算进度百分比（adb 本身只输出阶段性信息）
+ *
+ * 成功判定：
+ *   主路径：adb 退出码 0 且 stdout 含 "Success"
+ *   兜底：某些 adb 版本/时机下 stdout 没抓到内容（exit 0 但 output 为空）→
+ *        装包前先抓基线（旧 versionCode + lastUpdateTime），装包后再抓一次，
+ *        只有「versionCode 变了 / lastUpdateTime 更新了 / 之前根本不存在」才判定为成功；
+ *        否则视为安装未生效（覆盖安装失败时不会误报）
  */
 export async function installApk(
   deviceId: string,
   apkPath: string,
   onProgress?: (info: { stage: string; percent: number; bytesPerSec?: number }) => void,
+  packageName?: string,         // 可选：用于 fallback 验证
+  expectedVersionCode?: number, // 可选：APK 解析出的新版本号，用于精确比对
 ): Promise<void> {
   const adb = resolveAdbBinary() || 'adb';
 
@@ -250,60 +282,94 @@ export async function installApk(
     totalBytes = stat.size;
   } catch { /* ignore */ }
 
-  return new Promise<void>((resolve, reject) => {
-    // -r = reinstall; -d = allow downgrade; -g = grant all runtime permissions
+  // ---- 装包前基线：旧版本 versionCode + lastUpdateTime（仅在有 packageName 时收集）----
+  type Baseline = {
+    installed: boolean;
+    versionCode?: number;
+    lastUpdateTime?: string;
+  };
+  let baseline: Baseline = { installed: false };
+  if (packageName) {
+    baseline = await readPackageBaseline(deviceId, packageName);
+    // eslint-disable-next-line no-console
+    console.log(`[install] baseline ${packageName}:`, JSON.stringify(baseline));
+  }
+
+  // 主流程：spawn adb install
+  const result = await new Promise<{
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    stdout: string;
+    stderr: string;
+    exited: boolean;
+  }>((resolve, reject) => {
+    // -r = reinstall; -d = allow downgrade
     const args = ['-s', deviceId, 'install', '-r', '-d', apkPath];
     // eslint-disable-next-line no-console
     console.log('[install] spawn:', adb, args.join(' '));
 
-    const child = spawn(adb, args, { windowsHide: true });
+    const child = spawn(adb, args, {
+      windowsHide: true,
+      // 显式声明 stdio：忽略 stdin（避免 adb 等待输入），pipe stdout/stderr
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
     let stdoutBuf = '';
     let stderrBuf = '';
-    let stage = 'pushing';          // pushing / installing / done
+    let stage = 'pushing';
     let percent = 0;
     const startAt = Date.now();
-
-    // 假设 USB 2.0 典型速度 30MB/s；若有 stdout 进度会覆盖
     const ASSUMED_SPEED = 30 * 1024 * 1024;
 
-    // 每 300ms 发一次进度（基于耗时 * 速度 ÷ 总字节数）
     const tick = setInterval(() => {
       if (stage === 'done') return;
       const elapsed = (Date.now() - startAt) / 1000;
       if (totalBytes > 0) {
-        // pushing 阶段估算：最高到 92%（留 installing 阶段）
         const estimated = Math.min(92, (elapsed * ASSUMED_SPEED / totalBytes) * 100);
         if (estimated > percent) percent = estimated;
       }
       onProgress?.({ stage, percent, bytesPerSec: ASSUMED_SPEED });
     }, 300);
 
-    child.stdout.on('data', (chunk: Buffer) => {
-      const text = chunk.toString('utf8');
+    // stdout 强制 utf8 编码
+    child.stdout!.setEncoding('utf8');
+    child.stderr!.setEncoding('utf8');
+
+    child.stdout!.on('data', (text: string) => {
       stdoutBuf += text;
-      // 解析 adb 本身的输出切换阶段
-      if (/Performing Streamed Install/i.test(text)) {
-        stage = 'pushing';
-      }
-      // Android 新版本会输出 "Streaming: <sent> bytes / <total> bytes"
-      const streamMatch = text.match(/Streaming:\s*(\d+)\s*bytes\s*\/\s*(\d+)\s*bytes/);
-      if (streamMatch) {
-        const sent = Number(streamMatch[1]);
-        const tot = Number(streamMatch[2]);
-        if (tot > 0) {
-          percent = Math.min(92, (sent / tot) * 92);
-        }
+      // eslint-disable-next-line no-console
+      console.log(`[install] stdout: ${text.trimEnd()}`);
+      if (/Performing Streamed Install/i.test(text)) stage = 'pushing';
+      const m = text.match(/Streaming:\s*(\d+)\s*bytes\s*\/\s*(\d+)\s*bytes/);
+      if (m) {
+        const sent = Number(m[1]);
+        const tot = Number(m[2]);
+        if (tot > 0) percent = Math.min(92, (sent / tot) * 92);
       }
       if (/Success|Failure/i.test(text)) {
         stage = 'installing';
         percent = 96;
       }
     });
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrBuf += chunk.toString('utf8');
+    child.stderr!.on('data', (text: string) => {
+      stderrBuf += text;
+      // eslint-disable-next-line no-console
+      console.log(`[install] stderr: ${text.trimEnd()}`);
     });
 
-    // 10 分钟超时
+    let exited = false;
+    let exitCode: number | null = null;
+    let exitSignal: NodeJS.Signals | null = null;
+
+    // 同时监听 exit + close（exit 早，close 是 stdio 完全关闭）
+    child.on('exit', (code, signal) => {
+      exited = true;
+      exitCode = code;
+      exitSignal = signal;
+      // eslint-disable-next-line no-console
+      console.log(`[install] exit code=${code} signal=${signal}`);
+    });
+
     const timeout = setTimeout(() => {
       try { child.kill('SIGKILL'); } catch { /* ignore */ }
       clearInterval(tick);
@@ -315,29 +381,130 @@ export async function installApk(
       clearInterval(tick);
       reject(err);
     });
-    child.on('close', (code) => {
+
+    child.on('close', (code, signal) => {
       clearTimeout(timeout);
       clearInterval(tick);
-      const output = (stdoutBuf + '\n' + stderrBuf).trim();
+      // 优先取 close 的 code（因为 stdio 也已关闭、缓冲已 flush）
+      const finalCode = code ?? exitCode;
+      const finalSignal = signal ?? exitSignal;
       // eslint-disable-next-line no-console
-      console.log(`[install] done code=${code} output=${output.slice(0, 500)}`);
-      if (code === 0 && /Success/i.test(output)) {
-        stage = 'done';
-        percent = 100;
-        onProgress?.({ stage, percent });
-        resolve();
-      } else {
-        // 拼出一个信息量充足的错误：命令 + 退出码 + 原始输出
-        const cmd = `${adb} ${args.join(' ')}`;
-        const parts = [
-          `adb install 失败 (exit=${code})`,
-          `命令: ${cmd}`,
-          output ? `输出:\n${output}` : '（adb 未输出任何内容）',
-        ];
-        reject(new Error(parts.join('\n')));
-      }
+      console.log(
+        `[install] close code=${finalCode} signal=${finalSignal} stdoutLen=${stdoutBuf.length} stderrLen=${stderrBuf.length}`,
+      );
+      resolve({
+        code: finalCode,
+        signal: finalSignal,
+        stdout: stdoutBuf,
+        stderr: stderrBuf,
+        exited,
+      });
     });
   });
+
+  const output = (result.stdout + '\n' + result.stderr).trim();
+
+  // ---- 成功判定主路径 ----
+  if (result.code === 0 && /Success/i.test(output)) {
+    onProgress?.({ stage: 'done', percent: 100 });
+    return;
+  }
+
+  // ---- 失败判定 / 兜底验证 ----
+
+  // 明确 Failure：adb 已经报错了
+  if (/Failure|FAILED/i.test(output)) {
+    throw makeInstallError(adb, deviceId, apkPath, result.code, output, '安装被设备拒绝');
+  }
+
+  // exit 0 但没抓到 Success：可能是 adb 输出被吞了，做兜底验证
+  if (result.code === 0 && packageName) {
+    // eslint-disable-next-line no-console
+    console.log(`[install] code=0 但 stdout 无 Success，开始兜底验证 ${packageName}`);
+    try {
+      const after = await readPackageBaseline(deviceId, packageName);
+      // eslint-disable-next-line no-console
+      console.log(`[install] after-install state ${packageName}:`, JSON.stringify(after));
+
+      // 设备上根本没这个包（pm path 都查不到）→ 没装上
+      if (!after.installed) {
+        throw makeInstallError(
+          adb, deviceId, apkPath, result.code, output,
+          `adb exit=0 但设备上未找到 ${packageName}`,
+        );
+      }
+
+      // 之前没装过，现在装上了 → 全新安装成功
+      if (!baseline.installed) {
+        // eslint-disable-next-line no-console
+        console.log(`[install] 首次安装验证通过 ${packageName}`);
+        onProgress?.({ stage: 'done', percent: 100 });
+        return;
+      }
+
+      // 之前装过 → 必须 versionCode 不同 或 lastUpdateTime 变了，才算覆盖成功
+      const vcChanged =
+        after.versionCode != null &&
+        baseline.versionCode != null &&
+        after.versionCode !== baseline.versionCode;
+
+      // 如果 APK 解析出了 expectedVersionCode，比对设备端实际拿到的（更精确）
+      const matchesExpected =
+        expectedVersionCode != null &&
+        after.versionCode != null &&
+        after.versionCode === expectedVersionCode;
+
+      const utChanged =
+        after.lastUpdateTime != null &&
+        baseline.lastUpdateTime != null &&
+        after.lastUpdateTime !== baseline.lastUpdateTime;
+
+      if (vcChanged || matchesExpected || utChanged) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `[install] 覆盖安装验证通过：vcChanged=${vcChanged} matchesExpected=${matchesExpected} utChanged=${utChanged}`,
+        );
+        onProgress?.({ stage: 'done', percent: 100 });
+        return;
+      }
+
+      // 各项指标都没变 → 安装根本没生效，机器上还是旧版
+      throw makeInstallError(
+        adb, deviceId, apkPath, result.code, output,
+        `adb exit=0 但 ${packageName} 仍是旧版本 (versionCode=${after.versionCode ?? '?'})。
+可能原因：签名不一致、降级被拒、空间不足、包名冲突。
+请尝试先卸载旧版再安装。`,
+      );
+    } catch (e) {
+      // 如果 throw 的就是我们造的 install error，直接往外抛
+      if (e instanceof Error && e.message.startsWith('adb install 失败')) throw e;
+      // 否则是 shellExec 等异常
+      throw makeInstallError(
+        adb, deviceId, apkPath, result.code, output,
+        `验证安装结果失败：${(e as Error).message}`,
+      );
+    }
+  }
+
+  // 既没有 packageName 又没有明确成功标记 → 报错
+  throw makeInstallError(adb, deviceId, apkPath, result.code, output);
+}
+
+function makeInstallError(
+  adb: string,
+  deviceId: string,
+  apkPath: string,
+  code: number | null,
+  output: string,
+  hint?: string,
+): Error {
+  const cmd = `${adb} -s ${deviceId} install -r -d ${apkPath}`;
+  const parts = [
+    `adb install 失败 (exit=${code})${hint ? '：' + hint : ''}`,
+    `命令: ${cmd}`,
+    output ? `输出:\n${output}` : '（adb 未输出任何内容）',
+  ];
+  return new Error(parts.join('\n'));
 }
 
 /** 卸载应用 */

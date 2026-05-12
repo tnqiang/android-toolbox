@@ -103,6 +103,9 @@ export const IpcChannels = {
 
   // 文件浏览器（应用文档目录）
   FS_LIST: 'fs:list',
+  FS_LIST_STREAM: 'fs:listStream',           // 流式列目录
+  FS_LIST_STREAM_CHUNK: 'fs:listStream:chunk',// 主→渲染：流式 chunk
+  FS_LIST_STREAM_CANCEL: 'fs:listStream:cancel',
   FS_PROBE: 'fs:probe',
   FS_PULL: 'fs:pull',                    // 单个下载
   FS_PULL_MANY: 'fs:pullMany',           // 批量下载（可含目录）
