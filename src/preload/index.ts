@@ -22,7 +22,7 @@ const api = {
   powerOffDevice: (deviceId: string): Promise<IpcResult<true>> =>
     ipcRenderer.invoke(IpcChannels.DEVICE_POWER_OFF, deviceId),
 
-  takeScreenshot: (deviceId: string): Promise<IpcResult<string>> =>
+  takeScreenshot: (deviceId: string): Promise<IpcResult<{ image: string; rotation: 0 | 90 | 180 | 270 }>> =>
     ipcRenderer.invoke(IpcChannels.DEVICE_SCREENSHOT, deviceId),
 
   startDeviceTrack: (): Promise<IpcResult<boolean>> =>

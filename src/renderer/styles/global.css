@@ -442,7 +442,7 @@ html, body {
 .di-phone-mock {
   width: 180px;
   height: 320px;
-  border-radius: 24px;
+  border-radius: 0;
   background: linear-gradient(135deg, #eef4ff 0%, #dce7ff 100%);
   display: flex;
   flex-direction: column;

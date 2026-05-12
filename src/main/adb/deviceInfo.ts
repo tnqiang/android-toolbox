@@ -275,35 +275,87 @@ export async function powerOffDevice(deviceId: string): Promise<void> {
   await shellExec(deviceId, 'reboot -p', 5000);
 }
 
+/** 截屏返回结果：image 是 base64 PNG（不含 data: 前缀）；rotation 是屏幕方向（0/90/180/270） */
+export interface ScreenshotResult {
+  image: string;
+  rotation: 0 | 90 | 180 | 270;
+}
+
 /**
- * 截屏：返回 base64 编码的 PNG（不含 data: 前缀）
+ * 读取屏幕旋转角度（0/90/180/270），失败返回 0
+ * 兼容多种 Android 版本：
+ *  - dumpsys input | grep SurfaceOrientation
+ *  - dumpsys window | grep "mCurrentRotation\|mRotation"
+ *  - dumpsys SurfaceFlinger --display-id ... 不可靠，跳过
+ */
+async function getDisplayRotation(deviceId: string): Promise<0 | 90 | 180 | 270> {
+  const parseRot = (s: string): 0 | 90 | 180 | 270 | null => {
+    // 形如 "SurfaceOrientation: 1" 或 "mCurrentRotation=ROTATION_90" 或 "mRotation=1"
+    const m1 = s.match(/SurfaceOrientation\s*[:=]\s*(\d)/i);
+    if (m1) return ([0, 90, 180, 270] as const)[Number(m1[1]) % 4] ?? null;
+    const m2 = s.match(/mCurrentRotation\s*=\s*ROTATION_(\d+)/i);
+    if (m2) {
+      const v = Number(m2[1]);
+      if ([0, 90, 180, 270].includes(v)) return v as 0 | 90 | 180 | 270;
+    }
+    const m3 = s.match(/(?:mRotation|mLastOrientation)\s*=\s*(\d)/i);
+    if (m3) return ([0, 90, 180, 270] as const)[Number(m3[1]) % 4] ?? null;
+    return null;
+  };
+
+  try {
+    const out1 = await shellExec(deviceId, 'dumpsys input | grep -i SurfaceOrientation', 4000);
+    const r1 = parseRot(out1);
+    if (r1 != null) return r1;
+  } catch { /* ignore */ }
+
+  try {
+    const out2 = await shellExec(deviceId, 'dumpsys window | grep -E "mCurrentRotation|mRotation"', 4000);
+    const r2 = parseRot(out2);
+    if (r2 != null) return r2;
+  } catch { /* ignore */ }
+
+  return 0;
+}
+
+/**
+ * 截屏：返回 base64 编码的 PNG（不含 data: 前缀）以及屏幕方向
  * 优先用 adbkit 的 device.screencap()（走 adb 内部协议，比 shell screencap 快）
  * 失败 fallback 到 `exec-out screencap -p` 的 stdout
  */
-export async function takeScreenshot(deviceId: string): Promise<string> {
+export async function takeScreenshot(deviceId: string): Promise<ScreenshotResult> {
   const client = getAdbClient();
   const device = client.getDevice(deviceId);
 
+  // 并行拿屏幕方向（不阻塞主流程）
+  const rotationPromise = getDisplayRotation(deviceId).catch(() => 0 as const);
+
   // 方案 A：device.screencap()
+  let image: string | null = null;
   try {
     const stream = await withTimeout(device.screencap(), 12000, 'screencap');
     const buf: Buffer = await withTimeout(AdbUtil.readAll(stream), 12000, 'screencap readAll');
-    return buf.toString('base64');
+    image = buf.toString('base64');
   } catch (e) {
     // eslint-disable-next-line no-console
     console.warn('[screenshot] screencap() failed, fallback to shell:', (e as Error).message);
   }
 
-  // 方案 B：shell exec-out screencap -p（更兼容，但需要二进制流）
-  try {
-    const stream = await withTimeout(
-      device.shell('screencap -p'),
-      12000,
-      'shell screencap -p',
-    );
-    const buf: Buffer = await withTimeout(AdbUtil.readAll(stream), 12000, 'screencap shell readAll');
-    return buf.toString('base64');
-  } catch (e) {
-    throw new Error(`截屏失败：${(e as Error).message}`);
+  if (image == null) {
+    // 方案 B：shell exec-out screencap -p（更兼容，但需要二进制流）
+    try {
+      const stream = await withTimeout(
+        device.shell('screencap -p'),
+        12000,
+        'shell screencap -p',
+      );
+      const buf: Buffer = await withTimeout(AdbUtil.readAll(stream), 12000, 'screencap shell readAll');
+      image = buf.toString('base64');
+    } catch (e) {
+      throw new Error(`截屏失败：${(e as Error).message}`);
+    }
   }
+
+  const rotation = await rotationPromise;
+  return { image, rotation };
 }

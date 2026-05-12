@@ -63,6 +63,8 @@ export default function DeviceInfoPage() {
   const [detail, setDetail] = useState<DeviceDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [screenshot, setScreenshot] = useState<string | null>(null);
+  // 截图位图本身是否横向（naturalWidth > naturalHeight），由 img onLoad 探测
+  const [imgIsLandscape, setImgIsLandscape] = useState<boolean | null>(null);
   const [shotLoading, setShotLoading] = useState(false);
   const { message } = AntdApp.useApp();
 
@@ -86,8 +88,10 @@ export default function DeviceInfoPage() {
     setShotLoading(true);
     try {
       const r = await window.api.takeScreenshot(currentDeviceId);
-      if (r.ok && r.data) setScreenshot(r.data);
-      else if (!r.ok) message.error(`截屏失败：${r.error}`);
+      if (r.ok && r.data) {
+        setScreenshot(r.data.image);
+        setImgIsLandscape(null);
+      } else if (!r.ok) message.error(`截屏失败：${r.error}`);
     } finally {
       setShotLoading(false);
     }
@@ -96,6 +100,7 @@ export default function DeviceInfoPage() {
   // 切换设备时清掉旧截屏，重新加载
   useEffect(() => {
     setScreenshot(null);
+    setImgIsLandscape(null);
     load();
     refreshScreenshot();
   }, [load, refreshScreenshot]);
@@ -161,22 +166,53 @@ export default function DeviceInfoPage() {
       <div className="di-body">
         {/* 左侧：设备示意图 + 重启/关机 */}
         <div className="di-left">
-          <div className="di-phone-mock">
-            {screenshot ? (
-              <img
-                src={`data:image/png;base64,${screenshot}`}
-                alt="device screen"
-                className="di-phone-screen"
-              />
-            ) : shotLoading ? (
-              <Spin />
-            ) : (
-              <>
-                <MobileOutlined />
-                <div className="di-phone-label">{detail.model ?? detail.deviceId}</div>
-              </>
-            )}
-          </div>
+          {(() => {
+            // UI 上 mock 始终保持竖向 180x320
+            const mockW = 180;
+            const mockH = 320;
+            // 当图片本身是横向时，旋转 -90° 让其在竖向 mock 内呈现
+            const needRotate = screenshot != null && imgIsLandscape === true;
+            return (
+              <div
+                className="di-phone-mock"
+                style={{ width: mockW, height: mockH }}
+              >
+                {screenshot ? (
+                  <img
+                    src={`data:image/png;base64,${screenshot}`}
+                    alt="device screen"
+                    className="di-phone-screen"
+                    onLoad={(e) => {
+                      const img = e.currentTarget;
+                      setImgIsLandscape(img.naturalWidth > img.naturalHeight);
+                    }}
+                    style={
+                      needRotate
+                        ? {
+                            // 旋转前的 layout 宽高 = 容器的"高 × 宽"
+                            // 旋转 -90° 后视觉占满 180x320 容器
+                            width: mockH,
+                            height: mockW,
+                            position: 'absolute',
+                            top: '50%',
+                            left: '50%',
+                            transformOrigin: 'center center',
+                            transform: 'translate(-50%, -50%) rotate(-90deg)',
+                          }
+                        : undefined
+                    }
+                  />
+                ) : shotLoading ? (
+                  <Spin />
+                ) : (
+                  <>
+                    <MobileOutlined />
+                    <div className="di-phone-label">{detail.model ?? detail.deviceId}</div>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           <div className="di-actions">
             <Button
               icon={<CameraOutlined />}
