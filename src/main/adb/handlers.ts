@@ -1,7 +1,7 @@
 /**
  * IPC 处理器注册：把 adb 服务暴露给渲染进程
  */
-import { ipcMain, BrowserWindow } from 'electron';
+import { ipcMain, BrowserWindow, dialog } from 'electron';
 import { IpcChannels } from '../../shared/types';
 import type { AppCategory, IpcResult } from '../../shared/types';
 import { listDevices, trackDevices } from './device';
@@ -15,6 +15,7 @@ import {
 } from './fs';
 import { basename, join as joinPath } from 'path';
 import { existsSync, mkdirSync, statSync, readdirSync } from 'fs';
+import { writeFile } from 'fs/promises';
 
 let disposeTracker: (() => void) | null = null;
 
@@ -46,6 +47,34 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
   ipcMain.handle(IpcChannels.DEVICE_SCREENSHOT, async (_e, deviceId: string) => {
     try { return ok(await takeScreenshot(deviceId)); } catch (e) { return fail(e); }
   });
+
+  /**
+   * 保存截图到本地：弹出"另存为"对话框，把 base64 PNG 写入选中的路径
+   * 入参：base64（不含 data: 前缀）, suggestedName（默认文件名）
+   * 返回：data = 实际保存路径；用户取消时 ok=false, error="canceled"
+   */
+  ipcMain.handle(
+    IpcChannels.DEVICE_SCREENSHOT_SAVE,
+    async (_e, base64: string, suggestedName?: string) => {
+      try {
+        const win = getWindow();
+        if (!win) return fail('window not ready');
+        if (!base64) return fail('empty image');
+        const result = await dialog.showSaveDialog(win, {
+          title: '保存截图',
+          defaultPath: suggestedName || `screenshot_${Date.now()}.png`,
+          filters: [{ name: 'PNG 图片', extensions: ['png'] }],
+        });
+        if (result.canceled || !result.filePath) {
+          return { ok: false, error: 'canceled' } as IpcResult;
+        }
+        await writeFile(result.filePath, Buffer.from(base64, 'base64'));
+        return ok(result.filePath);
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
 
   // 设备插拔追踪 - 渲染进程主动启动，主进程推送
   ipcMain.handle(IpcChannels.DEVICE_TRACK, async () => {

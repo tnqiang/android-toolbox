@@ -25,6 +25,10 @@ const api = {
   takeScreenshot: (deviceId: string): Promise<IpcResult<{ image: string; rotation: 0 | 90 | 180 | 270 }>> =>
     ipcRenderer.invoke(IpcChannels.DEVICE_SCREENSHOT, deviceId),
 
+  /** 弹"另存为"对话框并把 base64 PNG 写入磁盘；取消返回 ok=false, error="canceled" */
+  saveScreenshot: (base64: string, suggestedName?: string): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IpcChannels.DEVICE_SCREENSHOT_SAVE, base64, suggestedName),
+
   startDeviceTrack: (): Promise<IpcResult<boolean>> =>
     ipcRenderer.invoke(IpcChannels.DEVICE_TRACK),
 

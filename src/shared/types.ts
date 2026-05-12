@@ -83,6 +83,7 @@ export const IpcChannels = {
   DEVICE_REBOOT: 'device:reboot',
   DEVICE_POWER_OFF: 'device:powerOff',
   DEVICE_SCREENSHOT: 'device:screenshot',
+  DEVICE_SCREENSHOT_SAVE: 'device:screenshot:save',
   DEVICE_TRACK: 'device:track',          // 主→渲染: 设备插拔事件
 
   // 应用相关

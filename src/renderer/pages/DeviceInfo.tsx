@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
-import { App as AntdApp, Button, Empty, Popconfirm, Progress, Spin } from 'antd';
+import { App as AntdApp, Button, Dropdown, Empty, Popconfirm, Progress, Spin } from 'antd';
 import {
   PoweroffOutlined, ReloadOutlined, SyncOutlined, MobileOutlined,
-  ThunderboltOutlined, CameraOutlined,
+  ThunderboltOutlined, CameraOutlined, SaveOutlined, CopyOutlined,
 } from '@ant-design/icons';
 import { useAppStore } from '../store/useAppStore';
 
@@ -97,6 +97,47 @@ export default function DeviceInfoPage() {
     }
   }, [currentDeviceId, message]);
 
+  // 保存截图到本地
+  const saveScreenshot = useCallback(async () => {
+    if (!screenshot) {
+      message.warning('暂无截图可保存');
+      return;
+    }
+    const ts = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const stamp = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`;
+    const namePart = currentDeviceId ? currentDeviceId.replace(/[^\w.-]+/g, '_') : 'device';
+    const suggested = `screenshot_${namePart}_${stamp}.png`;
+    const r = await window.api.saveScreenshot(screenshot, suggested);
+    if (r.ok && r.data) message.success(`已保存到：${r.data}`);
+    else if (r.error && r.error !== 'canceled') message.error(`保存失败：${r.error}`);
+  }, [screenshot, currentDeviceId, message]);
+
+  // 复制截图到剪贴板（PNG）
+  const copyScreenshot = useCallback(async () => {
+    if (!screenshot) {
+      message.warning('暂无截图可复制');
+      return;
+    }
+    try {
+      // base64 → Blob → ClipboardItem
+      const bin = atob(screenshot);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const blob = new Blob([arr], { type: 'image/png' });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const ClipboardItemCtor = (window as any).ClipboardItem;
+      if (!ClipboardItemCtor || !navigator.clipboard?.write) {
+        message.error('当前环境不支持图片复制到剪贴板');
+        return;
+      }
+      await navigator.clipboard.write([new ClipboardItemCtor({ 'image/png': blob })]);
+      message.success('已复制到剪贴板');
+    } catch (err) {
+      message.error(`复制失败：${(err as Error).message}`);
+    }
+  }, [screenshot, message]);
+
   // 切换设备时清掉旧截屏，重新加载
   useEffect(() => {
     setScreenshot(null);
@@ -172,45 +213,70 @@ export default function DeviceInfoPage() {
             const mockH = 320;
             // 当图片本身是横向时，旋转 -90° 让其在竖向 mock 内呈现
             const needRotate = screenshot != null && imgIsLandscape === true;
+            const menuItems = [
+              {
+                key: 'save',
+                icon: <SaveOutlined />,
+                label: '保存截图到本地…',
+                disabled: !screenshot,
+                onClick: saveScreenshot,
+              },
+              {
+                key: 'copy',
+                icon: <CopyOutlined />,
+                label: '复制到剪贴板',
+                disabled: !screenshot,
+                onClick: copyScreenshot,
+              },
+              { type: 'divider' as const },
+              {
+                key: 'refresh',
+                icon: <CameraOutlined />,
+                label: '重新截屏',
+                onClick: refreshScreenshot,
+              },
+            ];
             return (
-              <div
-                className="di-phone-mock"
-                style={{ width: mockW, height: mockH }}
-              >
-                {screenshot ? (
-                  <img
-                    src={`data:image/png;base64,${screenshot}`}
-                    alt="device screen"
-                    className="di-phone-screen"
-                    onLoad={(e) => {
-                      const img = e.currentTarget;
-                      setImgIsLandscape(img.naturalWidth > img.naturalHeight);
-                    }}
-                    style={
-                      needRotate
-                        ? {
-                            // 旋转前的 layout 宽高 = 容器的"高 × 宽"
-                            // 旋转 -90° 后视觉占满 180x320 容器
-                            width: mockH,
-                            height: mockW,
-                            position: 'absolute',
-                            top: '50%',
-                            left: '50%',
-                            transformOrigin: 'center center',
-                            transform: 'translate(-50%, -50%) rotate(-90deg)',
-                          }
-                        : undefined
-                    }
-                  />
-                ) : shotLoading ? (
-                  <Spin />
-                ) : (
-                  <>
-                    <MobileOutlined />
-                    <div className="di-phone-label">{detail.model ?? detail.deviceId}</div>
-                  </>
-                )}
-              </div>
+              <Dropdown menu={{ items: menuItems }} trigger={['contextMenu']}>
+                <div
+                  className="di-phone-mock"
+                  style={{ width: mockW, height: mockH }}
+                >
+                  {screenshot ? (
+                    <img
+                      src={`data:image/png;base64,${screenshot}`}
+                      alt="device screen"
+                      className="di-phone-screen"
+                      onLoad={(e) => {
+                        const img = e.currentTarget;
+                        setImgIsLandscape(img.naturalWidth > img.naturalHeight);
+                      }}
+                      style={
+                        needRotate
+                          ? {
+                              // 旋转前的 layout 宽高 = 容器的"高 × 宽"
+                              // 旋转 -90° 后视觉占满 180x320 容器
+                              width: mockH,
+                              height: mockW,
+                              position: 'absolute',
+                              top: '50%',
+                              left: '50%',
+                              transformOrigin: 'center center',
+                              transform: 'translate(-50%, -50%) rotate(-90deg)',
+                            }
+                          : undefined
+                      }
+                    />
+                  ) : shotLoading ? (
+                    <Spin />
+                  ) : (
+                    <>
+                      <MobileOutlined />
+                      <div className="di-phone-label">{detail.model ?? detail.deviceId}</div>
+                    </>
+                  )}
+                </div>
+              </Dropdown>
             );
           })()}
           <div className="di-actions">
