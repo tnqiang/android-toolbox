@@ -319,16 +319,21 @@ export async function installApk(
     let stage = 'pushing';
     let percent = 0;
     const startAt = Date.now();
-    const ASSUMED_SPEED = 30 * 1024 * 1024;
+    let lastBytes = 0;
 
     const tick = setInterval(() => {
       if (stage === 'done') return;
-      const elapsed = (Date.now() - startAt) / 1000;
-      if (totalBytes > 0) {
-        const estimated = Math.min(92, (elapsed * ASSUMED_SPEED / totalBytes) * 100);
-        if (estimated > percent) percent = estimated;
-      }
-      onProgress?.({ stage, percent, bytesPerSec: ASSUMED_SPEED });
+      const now = Date.now();
+      const elapsed = (now - startAt) / 1000;
+      // 用最近一次实际推送字节数估算实时速度（bytesPerSec）
+      // 如果还没抓到 Streaming 数据，降级用 5MB/s 估算
+      const estimated = lastBytes > 0 && elapsed > 1
+        ? Math.min(92, (lastBytes / Math.max(totalBytes, 1)) * 92)
+        : Math.min(92, (elapsed * 5 * 1024 * 1024 / Math.max(totalBytes, 1)) * 100);
+      if (estimated > percent) percent = estimated;
+      // 用实际已推送字节数估算实时速度，传给 UI
+      const bytesPerSec = lastBytes > 0 && elapsed > 1 ? lastBytes / elapsed : undefined;
+      onProgress?.({ stage, percent, bytesPerSec });
     }, 300);
 
     // stdout 强制 utf8 编码
@@ -345,6 +350,8 @@ export async function installApk(
         const sent = Number(m[1]);
         const tot = Number(m[2]);
         if (tot > 0) percent = Math.min(92, (sent / tot) * 92);
+        // 累计实际推送字节数（用于计算 bytesPerSec）
+        lastBytes = sent;
       }
       if (/Success|Failure/i.test(text)) {
         stage = 'installing';

@@ -267,7 +267,7 @@ export async function pushFile(
   deviceId: string,
   localPath: string,
   remotePath: string,
-  onProgress?: (bytes: number, totalBytes?: number) => void,
+  onProgress?: (bytes: number, totalBytes?: number, bytesPerSec?: number) => void,
 ): Promise<void> {
   const client = getAdbClient();
   const device = client.getDevice(deviceId);
@@ -286,8 +286,14 @@ export async function pushFile(
   );
 
   return new Promise<void>((resolve, reject) => {
+    const startAt = Date.now();
+
     transfer.on('progress', (stats: { bytesTransferred: number }) => {
-      onProgress?.(stats.bytesTransferred, total);
+      const elapsed = (Date.now() - startAt) / 1000;
+      const bytes = stats.bytesTransferred;
+      // 用实际传输字节数计算实时速度，传给 UI
+      const bytesPerSec = elapsed > 1 ? bytes / elapsed : undefined;
+      onProgress?.(bytes, total, bytesPerSec);
     });
     transfer.on('end', () => {
       onProgress?.(total, total);
