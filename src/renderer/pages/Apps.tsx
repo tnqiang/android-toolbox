@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Input, Table, Popconfirm, App as AntdApp, Empty,
+  Input, Table, Popconfirm, App as AntdApp, Empty, Dropdown,
 } from 'antd';
+import type { MenuProps } from 'antd';
 import {
-  ImportOutlined, ExportOutlined, DeleteOutlined, ReloadOutlined,
-  SearchOutlined, CloudDownloadOutlined,
+  ImportOutlined, DeleteOutlined, ReloadOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useAppStore } from '../store/useAppStore';
@@ -440,6 +441,62 @@ export default function AppsPage() {
     }
   };
 
+  // 创建引擎热更目录（仅 com.tencent.uc 适用）
+  // 在应用文档目录 /sdcard/Android/data/<pkg>/ 下创建 ExtraFiles/arm64-v8a
+  const onCreateEngineHotUpdateDir = async (pkg: string) => {
+    if (!currentDeviceId) {
+      message.warning('请先连接设备');
+      return;
+    }
+    const target = `/sdcard/Android/data/${pkg}/files/ExtraFiles/arm64-v8a`;
+    message.loading({ content: '创建中…', key: 'mkEngineDir' });
+    const r = await window.api.fsMkdir(currentDeviceId, target);
+    if (r.ok) {
+      message.success({
+        content: `已创建：${target}`,
+        key: 'mkEngineDir',
+        duration: 3,
+      });
+    } else {
+      message.error({
+        content: `创建失败：${r.error}`,
+        key: 'mkEngineDir',
+        duration: 4,
+      });
+    }
+  };
+
+  // 右键菜单状态
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    record: AppInfo | null;
+  }>({ x: 0, y: 0, record: null });
+
+  // 构造右键菜单项（按当前 record 动态生成）
+  const ctxMenuItems = useMemo<MenuProps['items']>(() => {
+    const r = ctxMenu.record;
+    if (!r) return [];
+    const items: MenuProps['items'] = [];
+    if (r.packageName === 'com.tencent.uc') {
+      items.push({
+        key: 'create-engine-hot-update-dir',
+        label: '创建引擎热更目录',
+      });
+    }
+    return items;
+  }, [ctxMenu.record]);
+
+  const onCtxMenuClick: MenuProps['onClick'] = ({ key }) => {
+    const r = ctxMenu.record;
+    if (!r) return;
+    if (key === 'create-engine-hot-update-dir') {
+      onCreateEngineHotUpdateDir(r.packageName);
+    }
+    setCtxMenu({ x: 0, y: 0, record: null });
+  };
+
+
   // 各分类计数（用于 Tab 上的徽标）
   const counts = useMemo(() => {
     return {
@@ -585,16 +642,10 @@ export default function AppsPage() {
         />
       </div>
 
-      {/* 工具栏：导入安装 / 导出 / 备份 / 卸载 / 刷新 */}
+      {/* 工具栏：导入安装 / 卸载 / 刷新 */}
       <div className="toolbar">
         <span className="tb-btn" onClick={onInstall}>
           <ImportOutlined /> 导入安装
-        </span>
-        <span className="tb-btn disabled">
-          <ExportOutlined /> 导出应用清单
-        </span>
-        <span className="tb-btn disabled">
-          <CloudDownloadOutlined /> 备份
         </span>
 
         {selectedKeys.length > 0 ? (
@@ -633,8 +684,38 @@ export default function AppsPage() {
             columnWidth: 48,
           }}
           scroll={tableBodyHeight > 0 ? { y: tableBodyHeight } : undefined}
+          onRow={(record) => ({
+            onContextMenu: (e) => {
+              // 仅在该行存在右键菜单项时拦截
+              if (record.packageName !== 'com.tencent.uc') return;
+              e.preventDefault();
+              setCtxMenu({ x: e.clientX, y: e.clientY, record });
+            },
+          })}
         />
       </div>
+
+      {/* 行右键菜单：通过受控 Dropdown + fixed 定位锚点实现 */}
+      <Dropdown
+        menu={{ items: ctxMenuItems, onClick: onCtxMenuClick }}
+        open={!!ctxMenu.record && (ctxMenuItems?.length ?? 0) > 0}
+        onOpenChange={(open) => {
+          if (!open) setCtxMenu({ x: 0, y: 0, record: null });
+        }}
+        trigger={[]}
+      >
+        <div
+          style={{
+            position: 'fixed',
+            left: ctxMenu.x,
+            top: ctxMenu.y,
+            width: 1,
+            height: 1,
+            pointerEvents: 'none',
+          }}
+        />
+      </Dropdown>
+
 
       {/* 文件浏览器抽屉：始终渲染，用 open 控制；关闭时通过 afterOpenChange 清 target */}
       <FileBrowserDrawer
