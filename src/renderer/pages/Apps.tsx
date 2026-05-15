@@ -496,6 +496,64 @@ export default function AppsPage() {
     setCtxMenu({ x: 0, y: 0, record: null });
   };
 
+  // 右键菜单打开时：监听全局事件以"自动关闭"
+  // 由于 Dropdown 使用 trigger={[]} 受控模式，antd 不会自己监听外部点击，需要我们补齐：
+  // - 任意 mousedown（除菜单自身）→ 关
+  // - 右键到别处 → 关（onContextMenu 里若命中其他可右键行会立刻重开新菜单）
+  // - Esc → 关
+  // - 滚动 / 窗口尺寸变化 → 关（避免菜单悬浮在错误位置）
+  // - 窗口失焦 → 关
+  useEffect(() => {
+    if (!ctxMenu.record) return;
+
+    const closeMenu = () => setCtxMenu({ x: 0, y: 0, record: null });
+
+    const isInsideDropdown = (target: EventTarget | null): boolean => {
+      if (!(target instanceof Node)) return false;
+      // antd 把 dropdown 渲染到 body 下的 .ant-dropdown 容器内
+      const el = target as Element;
+      const dropdownEl = (el.nodeType === 1 ? el : el.parentElement)?.closest?.('.ant-dropdown');
+      return !!dropdownEl;
+    };
+
+    const onMouseDown = (e: MouseEvent) => {
+      if (isInsideDropdown(e.target)) return;
+      closeMenu();
+    };
+    const onGlobalContextMenu = (e: MouseEvent) => {
+      // 让原生右键事件先冒泡到行上去（行 onContextMenu 会更新 ctxMenu），
+      // 这里仅当目标不在 dropdown 内时关闭旧菜单；新菜单（若有）会在下一次 setState 里被打开。
+      if (isInsideDropdown(e.target)) return;
+      closeMenu();
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeMenu();
+    };
+    const onScroll = () => closeMenu();
+    const onResize = () => closeMenu();
+    const onBlur = () => closeMenu();
+
+    // 用 setTimeout 推迟一帧绑定 mousedown，避免捕获到"触发右键时同步派发的鼠标按下事件"导致刚开就被关
+    const timer = window.setTimeout(() => {
+      window.addEventListener('mousedown', onMouseDown, true);
+    }, 0);
+    window.addEventListener('contextmenu', onGlobalContextMenu, true);
+    window.addEventListener('keydown', onKeyDown, true);
+    window.addEventListener('scroll', onScroll, true); // capture 以覆盖任意内部滚动容器
+    window.addEventListener('resize', onResize);
+    window.addEventListener('blur', onBlur);
+
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener('mousedown', onMouseDown, true);
+      window.removeEventListener('contextmenu', onGlobalContextMenu, true);
+      window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [ctxMenu.record]);
+
 
   // 各分类计数（用于 Tab 上的徽标）
   const counts = useMemo(() => {
