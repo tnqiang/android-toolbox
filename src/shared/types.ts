@@ -49,6 +49,23 @@ export interface RemoteEntry {
   mode: number;
 }
 
+/** 媒体文件（相册/视频） */
+export interface MediaEntry {
+  /** 设备上的绝对路径 */
+  path: string;
+  /** 文件名（含扩展名） */
+  name: string;
+  /** 字节 */
+  size: number;
+  /** 修改时间（ms） */
+  mtimeMs: number;
+  /** 扩展名（小写、无点） */
+  ext: string;
+}
+
+/** 媒体类型 */
+export type MediaKind = 'image' | 'video';
+
 /** 单个传输任务状态（文件浏览器） */
 export type FsTransferStatus = 'pending' | 'transferring' | 'success' | 'failed';
 export interface FsTransferProgressMsg {
@@ -119,6 +136,11 @@ export const IpcChannels = {
   // 文件关联（双击 .apk 打开本应用）
   APK_OPEN_REQUEST: 'apk:openRequest',   // 主→渲染：通知有外部 apk 待安装
   APK_OPEN_FETCH: 'apk:openFetch',       // 渲染→主：拉取启动至今积压的 apk 路径
+
+  // 媒体（相册/视频）
+  MEDIA_SCAN: 'media:scan',              // 扫描设备上的媒体文件
+  MEDIA_LOCAL_URL: 'media:localUrl',     // 拉到本地缓存并返回 file:// URL
+  MEDIA_REVEAL: 'media:reveal',          // 在系统文件管理器中显示本地缓存文件
 
   // 工具
   DIALOG_OPEN_APK: 'dialog:openApk',

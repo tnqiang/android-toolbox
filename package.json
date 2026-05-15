@@ -1,6 +1,6 @@
 {
   "name": "apk-install-helper",
-  "version": "0.3.8",
+  "version": "0.4.0",
   "description": "安卓 PC 装包助手 - 跨平台 APK 安装管理工具",
   "main": "dist-electron/main/index.js",
   "author": "ApkInstallHelper",
@@ -39,7 +39,7 @@
     "appId": "com.mobilehelper.app",
     "productName": "手机助手",
     "directories": {
-      "output": "release/v0.3.8"
+      "output": "release/v0.4.0"
     },
     "files": [
       "dist",

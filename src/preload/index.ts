@@ -5,7 +5,7 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import { IpcChannels } from '../shared/types';
 import type {
   AppCategory, AppInfo, DeviceInfo, IpcResult,
-  RemoteEntry, FsTransferProgressMsg,
+  RemoteEntry, FsTransferProgressMsg, MediaEntry, MediaKind,
 } from '../shared/types';
 
 const api = {
@@ -232,6 +232,26 @@ const api = {
   winMinimize: () => ipcRenderer.invoke(IpcChannels.WIN_MINIMIZE),
   winMaximize: () => ipcRenderer.invoke(IpcChannels.WIN_MAXIMIZE),
   winClose: () => ipcRenderer.invoke(IpcChannels.WIN_CLOSE),
+
+  // ---- 媒体（相册/视频） ----
+  /** 扫描设备上的媒体文件（按 mtime 倒序） */
+  mediaScan: (
+    deviceId: string,
+    kind: MediaKind,
+    opts?: { roots?: string[]; exts?: string[] },
+  ): Promise<IpcResult<MediaEntry[]>> =>
+    ipcRenderer.invoke(IpcChannels.MEDIA_SCAN, deviceId, kind, opts),
+
+  /** 拉到本地缓存并返回 file:// URL（同一文件只拉一次） */
+  mediaLocalUrl: (
+    deviceId: string,
+    entry: { path: string; mtimeMs: number; size: number },
+  ): Promise<IpcResult<string>> =>
+    ipcRenderer.invoke(IpcChannels.MEDIA_LOCAL_URL, deviceId, entry),
+
+  /** 在系统文件管理器中显示本地缓存文件 */
+  mediaReveal: (localUrl: string): Promise<IpcResult<true>> =>
+    ipcRenderer.invoke(IpcChannels.MEDIA_REVEAL, localUrl),
 
   // ---- 文件关联：双击 apk 启动 ----
   /** 渲染进程启动后调用一次，拿走启动至今的所有待安装 apk 路径 */

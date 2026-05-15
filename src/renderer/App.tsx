@@ -6,6 +6,7 @@ import StatusBar from './components/StatusBar';
 import TaskPanel from './components/TaskPanel';
 import AppsPage from './pages/Apps';
 import DeviceInfoPage from './pages/DeviceInfo';
+import GalleryPage from './pages/Gallery';
 import { useAppStore } from './store/useAppStore';
 import { useTaskStore } from './store/useTaskStore';
 
@@ -238,7 +239,8 @@ export default function App() {
         <div className="app-content">
           {section === 'info' && <DeviceInfoPage />}
           {section === 'apps' && <AppsPage />}
-          {section !== 'info' && section !== 'apps' && (
+          {section === 'gallery' && <GalleryPage />}
+          {section !== 'info' && section !== 'apps' && section !== 'gallery' && (
             <div style={{ padding: 24, color: '#8c8c8c' }}>
               「{section}」模块开发中…
             </div>
