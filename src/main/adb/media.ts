@@ -8,12 +8,16 @@
  *      文件名用 sha1(devicePath + mtime + size) + 原扩展名 防冲突 + 实现"内容不变就直接命中"。
  *   3. 限制单文件最大缓存大小；定期不做清理（缓存目录在 app.getPath('userData')/media-cache 下，由用户/卸载清理）。
  */
-import { app } from 'electron';
+import { app, protocol, net } from 'electron';
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { join, basename, normalize, sep } from 'path';
+import { pathToFileURL } from 'url';
 import { AdbUtil, getAdbClient } from './client';
 import { pullFile } from './fs';
+
+/** 自定义协议名：渲染进程用 media://<filename> 加载缓存文件 */
+export const MEDIA_PROTOCOL = 'media';
 
 /** 支持的图片扩展名（小写） */
 export const IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'];
@@ -235,17 +239,73 @@ export async function ensureLocalCache(
 }
 
 /**
- * 暴露给渲染进程：拿到一个可直接通过 <img src> / <video src> 加载的 file://path
- * 注意：webview 端通过 BrowserWindow 的 webSecurity=true（默认）也可以加载 file://
- * 但有些资源加载限制时建议用 app:// 协议；这里项目内已经有 file:// 用法（截图保存等），沿用即可。
+ * 暴露给渲染进程：拿到一个可直接通过 <img src> / <video src> 加载的 URL。
+ *
+ * 由于 Electron 默认禁止渲染进程加载 file:// 本地资源
+ * （报错: "Not allowed to load local resource: file:///..."），
+ * 这里改用自定义协议 media://<filename>，由 registerMediaProtocol 拦截后
+ * 映射回缓存目录里的真实文件。
  */
 export async function getLocalUrlForMedia(
   deviceId: string,
   entry: { path: string; mtimeMs: number; size: number },
 ): Promise<string> {
   const local = await ensureLocalCache(deviceId, entry);
-  // Windows 路径需要转 file:///
-  const norm = local.replace(/\\/g, '/');
-  const url = norm.startsWith('/') ? `file://${norm}` : `file:///${norm}`;
-  return url;
+  // 文件名已是 hash+ext，足够唯一；只需 basename 即可
+  return `${MEDIA_PROTOCOL}://local/${basename(local)}`;
+}
+
+/**
+ * 把 media://local/<name> 反解到本地文件绝对路径。
+ * 失败时返回 null（防越权：拒绝任何包含路径分隔符 / .. 的非法名）。
+ */
+export function resolveMediaUrlToLocalPath(url: string): string | null {
+  if (!url) return null;
+  // 兼容 media://local/xxx 与 media:///xxx 两种写法
+  const prefix1 = `${MEDIA_PROTOCOL}://local/`;
+  const prefix2 = `${MEDIA_PROTOCOL}:///`;
+  let name = '';
+  if (url.startsWith(prefix1)) name = url.slice(prefix1.length);
+  else if (url.startsWith(prefix2)) name = url.slice(prefix2.length);
+  else return null;
+
+  try {
+    name = decodeURIComponent(name);
+  } catch { /* ignore */ }
+  // 去掉查询/fragment
+  const q = name.indexOf('?');
+  if (q >= 0) name = name.slice(0, q);
+  const h = name.indexOf('#');
+  if (h >= 0) name = name.slice(0, h);
+
+  // 安全校验：禁止任何路径分隔符或上跳
+  if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) return null;
+
+  const root = getCacheRoot();
+  const full = normalize(join(root, name));
+  // 二次校验：必须在 cache 根目录下
+  const rootNorm = normalize(root + sep);
+  if (!full.startsWith(rootNorm)) return null;
+  return full;
+}
+
+/**
+ * 注册 media:// 协议：把请求映射到本地缓存目录的文件。
+ * 必须在 app.whenReady() 之后调用一次。
+ *
+ * 同时配合在 ready 之前调用 protocol.registerSchemesAsPrivileged，
+ * 把 media 标记为 standard + secure + supportFetchAPI + stream，
+ * 这样渲染进程的 <img>/<video> 才能正常加载并支持 Range 请求。
+ */
+export function registerMediaProtocol(): void {
+  // 确保缓存根目录存在
+  getCacheRoot();
+  protocol.handle(MEDIA_PROTOCOL, async (request) => {
+    const local = resolveMediaUrlToLocalPath(request.url);
+    if (!local || !existsSync(local)) {
+      return new Response('not found', { status: 404 });
+    }
+    // net.fetch 支持 file:// 并自动处理 Range，对视频流式播放更友好
+    return net.fetch(pathToFileURL(local).toString());
+  });
 }

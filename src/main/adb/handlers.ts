@@ -14,7 +14,7 @@ import {
   probeRemote, joinRemote,
 } from './fs';
 import {
-  scanMedia, getLocalUrlForMedia, IMAGE_EXTS,
+  scanMedia, getLocalUrlForMedia, IMAGE_EXTS, resolveMediaUrlToLocalPath,
 } from './media';
 import { basename, join as joinPath } from 'path';
 import { existsSync, mkdirSync, statSync, readdirSync } from 'fs';
@@ -519,10 +519,19 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
   /** 在系统文件管理器中显示本地缓存文件 */
   ipcMain.handle(IpcChannels.MEDIA_REVEAL, async (_e, localUrl: string) => {
     try {
-      // 接受 file:// 或裸路径
-      let p = localUrl;
-      if (p.startsWith('file:///')) p = decodeURIComponent(p.slice('file:///'.length));
-      else if (p.startsWith('file://')) p = decodeURIComponent(p.slice('file://'.length));
+      let p: string | null = null;
+      // 优先支持 media:// 协议（当前实现）
+      if (localUrl.startsWith('media://')) {
+        p = resolveMediaUrlToLocalPath(localUrl);
+      } else if (localUrl.startsWith('file:///')) {
+        p = decodeURIComponent(localUrl.slice('file:///'.length));
+      } else if (localUrl.startsWith('file://')) {
+        p = decodeURIComponent(localUrl.slice('file://'.length));
+      } else {
+        p = localUrl;
+      }
+      if (!p) return fail('invalid url');
+      // Windows 下 showItemInFolder 需要反斜杠
       shell.showItemInFolder(p.replace(/\//g, process.platform === 'win32' ? '\\' : '/'));
       return ok(true);
     } catch (e) {
