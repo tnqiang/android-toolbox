@@ -1,8 +1,27 @@
-import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell, Menu, protocol } from 'electron';
 import { join } from 'path';
 import { existsSync, statSync } from 'fs';
 import { registerAdbHandlers, disposeAdb } from './adb/handlers';
 import { IpcChannels } from '../shared/types';
+import { registerMediaProtocol, MEDIA_PROTOCOL } from './adb/media';
+
+// 把 media:// 注册为安全的 standard scheme：
+// - standard: 允许相对路径解析、CORS 走标准流程
+// - secure: 视为安全上下文，避免 mixed-content 限制
+// - supportFetchAPI / stream: 支持 fetch 和 Range（视频流式播放需要）
+// 必须在 app.ready 之前调用。
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: MEDIA_PROTOCOL,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+    },
+  },
+]);
 
 // 全局异常兜底：避免任何未捕获异常导致 Electron 整体崩溃
 process.on('uncaughtException', (err) => {
@@ -221,6 +240,7 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     registerSystemHandlers();
     registerAdbHandlers(() => mainWindow);
+    registerMediaProtocol();
     await createWindow();
 
     // 首次启动：argv 里如果带了 apk，等渲染进程拉取

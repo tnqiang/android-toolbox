@@ -1,6 +1,6 @@
 import { Empty, Select } from 'antd';
 import {
-  AppstoreOutlined, InfoCircleOutlined,
+  AppstoreOutlined, InfoCircleOutlined, PictureOutlined,
 } from '@ant-design/icons';
 import { useAppStore } from '../store/useAppStore';
 
@@ -12,6 +12,7 @@ interface Props {
 const MENU = [
   { key: 'info',     label: '设备信息', icon: <InfoCircleOutlined /> },
   { key: 'apps',     label: '应用',     icon: <AppstoreOutlined /> },
+  { key: 'gallery',  label: '相册',     icon: <PictureOutlined /> },
 ];
 
 export default function Sidebar({ section, onSectionChange }: Props) {

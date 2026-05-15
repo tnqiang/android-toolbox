@@ -1,9 +1,9 @@
 /**
  * IPC 处理器注册：把 adb 服务暴露给渲染进程
  */
-import { ipcMain, BrowserWindow, dialog } from 'electron';
+import { ipcMain, BrowserWindow, dialog, shell } from 'electron';
 import { IpcChannels } from '../../shared/types';
-import type { AppCategory, IpcResult } from '../../shared/types';
+import type { AppCategory, IpcResult, MediaKind } from '../../shared/types';
 import { listDevices, trackDevices } from './device';
 import { listApps, getAppDetail, getAppDetailBatch, getAllAppDataSizes, installApk, uninstallApp, exportApk, clearDetailCacheForPackage } from './package';
 import { getAppMeta, getAppMetaBatch, precacheMetaFromLocalApk } from './meta';
@@ -13,6 +13,9 @@ import {
   listDir, listDirStreaming, pullFile, pushFile, mkdirRemote, removeRemote, renameRemote,
   probeRemote, joinRemote,
 } from './fs';
+import {
+  scanMedia, getLocalUrlForMedia, IMAGE_EXTS, resolveMediaUrlToLocalPath,
+} from './media';
 import { basename, join as joinPath } from 'path';
 import { existsSync, mkdirSync, statSync, readdirSync } from 'fs';
 import { writeFile } from 'fs/promises';
@@ -461,6 +464,80 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
       return ok(results);
     }
   );
+
+  // ================== 媒体（相册/视频） ==================
+
+  /**
+   * 扫描设备上的媒体文件
+   * - kind=image: 默认扫 DCIM/Pictures
+   * - kind=video: 默认扫 DCIM、Pictures、Movies；扩展名 mp4/mkv/mov...
+   * - roots/exts 可传入覆盖默认
+   */
+  ipcMain.handle(
+    IpcChannels.MEDIA_SCAN,
+    async (
+      _e,
+      deviceId: string,
+      kind: MediaKind,
+      opts?: { roots?: string[]; exts?: string[] },
+    ) => {
+      try {
+        let roots = opts?.roots;
+        let exts = opts?.exts;
+        if (kind === 'image') {
+          if (!roots) roots = ['/sdcard/DCIM', '/sdcard/Pictures'];
+          if (!exts) exts = IMAGE_EXTS;
+        } else {
+          if (!roots) roots = ['/sdcard/DCIM', '/sdcard/Movies', '/sdcard/Pictures'];
+          if (!exts) exts = ['mp4', 'mkv', 'mov', 'avi', '3gp', 'webm', 'm4v'];
+        }
+        const list = await scanMedia(deviceId, roots, exts);
+        return ok(list);
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  /** 拉到本地缓存并返回 file:// URL，渲染层用 <img>/<video> 直接预览 */
+  ipcMain.handle(
+    IpcChannels.MEDIA_LOCAL_URL,
+    async (
+      _e,
+      deviceId: string,
+      entry: { path: string; mtimeMs: number; size: number },
+    ) => {
+      try {
+        const url = await getLocalUrlForMedia(deviceId, entry);
+        return ok(url);
+      } catch (e) {
+        return fail(e);
+      }
+    },
+  );
+
+  /** 在系统文件管理器中显示本地缓存文件 */
+  ipcMain.handle(IpcChannels.MEDIA_REVEAL, async (_e, localUrl: string) => {
+    try {
+      let p: string | null = null;
+      // 优先支持 media:// 协议（当前实现）
+      if (localUrl.startsWith('media://')) {
+        p = resolveMediaUrlToLocalPath(localUrl);
+      } else if (localUrl.startsWith('file:///')) {
+        p = decodeURIComponent(localUrl.slice('file:///'.length));
+      } else if (localUrl.startsWith('file://')) {
+        p = decodeURIComponent(localUrl.slice('file://'.length));
+      } else {
+        p = localUrl;
+      }
+      if (!p) return fail('invalid url');
+      // Windows 下 showItemInFolder 需要反斜杠
+      shell.showItemInFolder(p.replace(/\//g, process.platform === 'win32' ? '\\' : '/'));
+      return ok(true);
+    } catch (e) {
+      return fail(e);
+    }
+  });
 }
 
 export function disposeAdb() {
