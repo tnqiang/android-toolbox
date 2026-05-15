@@ -116,6 +116,10 @@ export const IpcChannels = {
   FS_RENAME: 'fs:rename',
   FS_TRANSFER_PROGRESS: 'fs:transfer:progress', // 主→渲染：传输进度
 
+  // 文件关联（双击 .apk 打开本应用）
+  APK_OPEN_REQUEST: 'apk:openRequest',   // 主→渲染：通知有外部 apk 待安装
+  APK_OPEN_FETCH: 'apk:openFetch',       // 渲染→主：拉取启动至今积压的 apk 路径
+
   // 工具
   DIALOG_OPEN_APK: 'dialog:openApk',
   DIALOG_OPEN_DIR: 'dialog:openDir',

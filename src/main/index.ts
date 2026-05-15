@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, Menu } from 'electron';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { registerAdbHandlers, disposeAdb } from './adb/handlers';
 import { IpcChannels } from '../shared/types';
 
@@ -20,6 +20,64 @@ const isDev = !app.isPackaged;
 Menu.setApplicationMenu(null);
 
 let mainWindow: BrowserWindow | null = null;
+
+// ---------------- 文件关联：双击 .apk 启动本应用 ----------------
+//
+// Windows：argv 形如 [exe, ...flags, "C:\path\to\xxx.apk"]
+//          已运行时再双击会触发 second-instance，argv 同上
+// macOS：  通过 'open-file' 事件拿到路径
+//
+// 渲染进程未就绪前到达的 apk 会先入队 pendingApkPaths；
+// 渲染进程 ready 后会主动 fetch 一次清空队列。
+
+const pendingApkPaths: string[] = [];
+
+/** 把若干 apk 路径累积到队列，并尝试推给已就绪的渲染进程 */
+function ingestApkPaths(paths: string[]) {
+  if (!paths || paths.length === 0) return;
+  const valid: string[] = [];
+  for (const p of paths) {
+    if (!p) continue;
+    if (!/\.apk$/i.test(p)) continue;
+    try {
+      // 必须是真实存在的文件
+      const st = statSync(p);
+      if (!st.isFile()) continue;
+    } catch {
+      continue;
+    }
+    valid.push(p);
+  }
+  if (valid.length === 0) return;
+
+  for (const p of valid) {
+    if (!pendingApkPaths.includes(p)) pendingApkPaths.push(p);
+  }
+
+  // 渲染进程已加载完成则立刻通知；否则等渲染进程拉取
+  const win = mainWindow;
+  if (win && !win.isDestroyed() && !win.webContents.isLoading()) {
+    win.webContents.send(IpcChannels.APK_OPEN_REQUEST, valid);
+  }
+
+  // 把窗口顶起来
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+  }
+}
+
+/** 从 argv 中挑出 .apk 文件路径（忽略 electron 自身的开关参数） */
+function pickApkPathsFromArgv(argv: string[]): string[] {
+  const result: string[] = [];
+  for (const a of argv) {
+    if (!a) continue;
+    if (a.startsWith('-')) continue;        // 忽略 --xxx / -xxx 开关
+    if (/\.apk$/i.test(a)) result.push(a);
+  }
+  return result;
+}
 
 async function createWindow() {
   // 窗口图标：dev 用项目 resources 下的；生产用打包进 resources 的
@@ -126,19 +184,57 @@ function registerSystemHandlers() {
     else mainWindow.maximize();
   });
   ipcMain.handle(IpcChannels.WIN_CLOSE, () => mainWindow?.close());
+
+  // 渲染进程启动后主动拉取启动至今积压的 apk 路径
+  ipcMain.handle(IpcChannels.APK_OPEN_FETCH, () => {
+    const paths = pendingApkPaths.slice();
+    pendingApkPaths.length = 0;
+    return { ok: true, data: paths };
+  });
 }
 
-app.whenReady().then(async () => {
-  registerSystemHandlers();
-  registerAdbHandlers(() => mainWindow);
-  await createWindow();
+// ---- 单实例锁：保证只有一个进程，第二次双击 .apk 由本实例处理 ----
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  // 已运行时：用户再次双击 apk → Windows 会用 argv 唤起新进程，本进程在这里收到
+  app.on('second-instance', (_event, argv) => {
+    const apks = pickApkPathsFromArgv(argv);
+    ingestApkPaths(apks);
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
+    // 顶起已有窗口
+    const win = mainWindow;
+    if (win && !win.isDestroyed()) {
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
     }
   });
-});
+
+  // macOS：通过 open-file 事件接收（可能在 ready 之前/之后）
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    ingestApkPaths([filePath]);
+  });
+
+  app.whenReady().then(async () => {
+    registerSystemHandlers();
+    registerAdbHandlers(() => mainWindow);
+    await createWindow();
+
+    // 首次启动：argv 里如果带了 apk，等渲染进程拉取
+    // Windows 打包后 argv[0] 是 exe，后面才是 apk；Electron 框架自身的开关已被过滤
+    const initialApks = pickApkPathsFromArgv(process.argv.slice(1));
+    if (initialApks.length > 0) ingestApkPaths(initialApks);
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();

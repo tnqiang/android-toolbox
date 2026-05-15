@@ -232,6 +232,18 @@ const api = {
   winMinimize: () => ipcRenderer.invoke(IpcChannels.WIN_MINIMIZE),
   winMaximize: () => ipcRenderer.invoke(IpcChannels.WIN_MAXIMIZE),
   winClose: () => ipcRenderer.invoke(IpcChannels.WIN_CLOSE),
+
+  // ---- 文件关联：双击 apk 启动 ----
+  /** 渲染进程启动后调用一次，拿走启动至今的所有待安装 apk 路径 */
+  fetchPendingApkOpens: (): Promise<IpcResult<string[]>> =>
+    ipcRenderer.invoke(IpcChannels.APK_OPEN_FETCH),
+
+  /** 监听运行期 apk 打开事件（已运行时用户再次双击 apk） */
+  onApkOpenRequest: (listener: (paths: string[]) => void) => {
+    const handler = (_: unknown, paths: string[]) => listener(paths);
+    ipcRenderer.on(IpcChannels.APK_OPEN_REQUEST, handler);
+    return () => ipcRenderer.removeListener(IpcChannels.APK_OPEN_REQUEST, handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('api', api);

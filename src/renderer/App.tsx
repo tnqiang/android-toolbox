@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { App as AntdApp } from 'antd';
 import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';
@@ -18,6 +18,40 @@ export default function App() {
   // 拖拽遮罩显示状态
   const [dragOver, setDragOver] = useState(false);
   const dragCounter = useRef(0);
+
+  /**
+   * 安装一组 apk 路径（拖拽 / 双击 apk 文件关联 / 首次启动 argv 复用此入口）
+   * - 自动过滤非 .apk
+   * - 当前没有连接设备时给出提示并把路径暂存，待设备连入再自动重试
+   */
+  const pendingApkQueueRef = useRef<string[]>([]);
+  const installApkPaths = useCallback((rawPaths: string[]) => {
+    const apkPaths = (rawPaths || []).filter((p) => p && /\.apk$/i.test(p));
+    if (apkPaths.length === 0) return;
+
+    const deviceId = useAppStore.getState().currentDeviceId;
+    if (!deviceId) {
+      // 还没有选中的设备：先暂存，等设备连入再装
+      for (const p of apkPaths) {
+        if (!pendingApkQueueRef.current.includes(p)) {
+          pendingApkQueueRef.current.push(p);
+        }
+      }
+      message.warning('请先连接安卓设备，APK 已加入等待队列');
+      return;
+    }
+
+    // 立刻把任务插入面板（installing 状态 0%）
+    const ts = useTaskStore.getState();
+    for (const p of apkPaths) {
+      ts.upsertTask({ apk: p, status: 'installing', percent: 0, stage: 'starting' });
+    }
+
+    window.api.installApks(deviceId, apkPaths).catch((err) => {
+      // eslint-disable-next-line no-console
+      console.error('[install] error', err);
+    });
+  }, [message]);
 
   // 启动设备追踪
   useEffect(() => {
@@ -146,19 +180,7 @@ export default function App() {
         }
         const apkPaths = paths.filter((p) => /\.apk$/i.test(p));
         if (apkPaths.length === 0) { message.warning('未检测到 APK 文件'); return; }
-        if (!currentDeviceId) { message.warning('请先连接安卓设备'); return; }
-
-        // 立刻把任务插入面板（installing 状态 0%）
-        const ts = useTaskStore.getState();
-        for (const p of apkPaths) {
-          ts.upsertTask({ apk: p, status: 'installing', percent: 0, stage: 'starting' });
-        }
-
-        // 后台触发 IPC 安装，不 await 不阻塞；进度由全局 onInstallProgress 更新
-        window.api.installApks(currentDeviceId, apkPaths).catch((err) => {
-          // eslint-disable-next-line no-console
-          console.error('[drop] install error', err);
-        });
+        installApkPaths(apkPaths);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error('[drop] error', err);
@@ -175,7 +197,38 @@ export default function App() {
       window.removeEventListener('dragleave', onDragLeave);
       window.removeEventListener('drop', onDrop);
     };
-  }, [currentDeviceId, message]);
+  }, [currentDeviceId, message, installApkPaths]);
+
+  // 文件关联：双击 .apk 自动安装
+  // - 启动时拉取一次（首次启动 argv 带的 apk）
+  // - 运行期监听（已运行时再次双击 apk）
+  useEffect(() => {
+    let off: (() => void) | undefined;
+    (async () => {
+      try {
+        const resp = await window.api.fetchPendingApkOpens();
+        if (resp.ok && resp.data && resp.data.length > 0) {
+          installApkPaths(resp.data);
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('[apk-open] fetch error', err);
+      }
+      off = window.api.onApkOpenRequest((paths) => {
+        installApkPaths(paths);
+      });
+    })();
+    return () => { off?.(); };
+  }, [installApkPaths]);
+
+  // 设备从无到有连入时：把暂存的 apk 队列冲掉
+  useEffect(() => {
+    if (!currentDeviceId) return;
+    const queued = pendingApkQueueRef.current.slice();
+    if (queued.length === 0) return;
+    pendingApkQueueRef.current = [];
+    installApkPaths(queued);
+  }, [currentDeviceId, installApkPaths]);
 
   return (
     <>
