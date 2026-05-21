@@ -23,9 +23,12 @@ export default function App() {
   /**
    * 安装一组 apk 路径（拖拽 / 双击 apk 文件关联 / 首次启动 argv 复用此入口）
    * - 自动过滤非 .apk
-   * - 当前没有连接设备时给出提示并把路径暂存，待设备连入再自动重试
+   * - 当前没有连接设备时把路径暂存，等设备连入由下面的 useEffect 自动消费
+   * - 为了避免启动竞态（首次启动 argv 带 apk 时，设备追踪 IPC 还没回包就误报"请先连接设备"），
+   *   入队后给一个 1.5s 的宽限期：若期间设备进来则静默安装，否则才提示用户
    */
   const pendingApkQueueRef = useRef<string[]>([]);
+  const noDeviceToastTimerRef = useRef<number | null>(null);
   const installApkPaths = useCallback((rawPaths: string[]) => {
     const apkPaths = (rawPaths || []).filter((p) => p && /\.apk$/i.test(p));
     if (apkPaths.length === 0) return;
@@ -38,7 +41,18 @@ export default function App() {
           pendingApkQueueRef.current.push(p);
         }
       }
-      message.warning('请先连接安卓设备，APK 已加入等待队列');
+      // 1.5s 宽限期：等设备追踪 IPC 真正完成。期间如果 currentDeviceId 出现，
+      // 监听 currentDeviceId 的 useEffect 会冲队并清掉这个 timer，从而不弹提示。
+      if (noDeviceToastTimerRef.current == null) {
+        noDeviceToastTimerRef.current = window.setTimeout(() => {
+          noDeviceToastTimerRef.current = null;
+          // 仍然没设备才提示
+          if (!useAppStore.getState().currentDeviceId
+              && pendingApkQueueRef.current.length > 0) {
+            message.warning('请先连接安卓设备，APK 已加入等待队列');
+          }
+        }, 1500);
+      }
       return;
     }
 
@@ -222,9 +236,14 @@ export default function App() {
     return () => { off?.(); };
   }, [installApkPaths]);
 
-  // 设备从无到有连入时：把暂存的 apk 队列冲掉
+  // 设备从无到有连入时：把暂存的 apk 队列冲掉，并取消"无设备"提示
   useEffect(() => {
     if (!currentDeviceId) return;
+    // 设备已就绪：把宽限期定时器清掉，避免误报
+    if (noDeviceToastTimerRef.current != null) {
+      window.clearTimeout(noDeviceToastTimerRef.current);
+      noDeviceToastTimerRef.current = null;
+    }
     const queued = pendingApkQueueRef.current.slice();
     if (queued.length === 0) return;
     pendingApkQueueRef.current = [];
