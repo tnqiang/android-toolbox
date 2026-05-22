@@ -63,8 +63,7 @@ export default function DeviceInfoPage() {
   const [detail, setDetail] = useState<DeviceDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [screenshot, setScreenshot] = useState<string | null>(null);
-  // 截图位图本身是否横向（naturalWidth > naturalHeight），由 img onLoad 探测
-  const [imgIsLandscape, setImgIsLandscape] = useState<boolean | null>(null);
+  const [imgSize, setImgSize] = useState<{ w: number; h: number } | null>(null);
   const [shotLoading, setShotLoading] = useState(false);
   const { message } = AntdApp.useApp();
 
@@ -90,14 +89,13 @@ export default function DeviceInfoPage() {
       const r = await window.api.takeScreenshot(currentDeviceId);
       if (r.ok && r.data) {
         setScreenshot(r.data.image);
-        setImgIsLandscape(null);
+        setImgSize(null);
       } else if (!r.ok) message.error(`截屏失败：${r.error}`);
     } finally {
       setShotLoading(false);
     }
   }, [currentDeviceId, message]);
 
-  // 保存截图到本地
   const saveScreenshot = useCallback(async () => {
     if (!screenshot) {
       message.warning('暂无截图可保存');
@@ -113,14 +111,12 @@ export default function DeviceInfoPage() {
     else if (r.error && r.error !== 'canceled') message.error(`保存失败：${r.error}`);
   }, [screenshot, currentDeviceId, message]);
 
-  // 复制截图到剪贴板（PNG）
   const copyScreenshot = useCallback(async () => {
     if (!screenshot) {
       message.warning('暂无截图可复制');
       return;
     }
     try {
-      // base64 → Blob → ClipboardItem
       const bin = atob(screenshot);
       const arr = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
@@ -138,10 +134,9 @@ export default function DeviceInfoPage() {
     }
   }, [screenshot, message]);
 
-  // 切换设备时清掉旧截屏，重新加载
   useEffect(() => {
     setScreenshot(null);
-    setImgIsLandscape(null);
+    setImgSize(null);
     load();
     refreshScreenshot();
   }, [load, refreshScreenshot]);
@@ -159,6 +154,8 @@ export default function DeviceInfoPage() {
     if (r.ok) message.success('已发送关机指令');
     else message.error(`关机失败：${r.error}`);
   };
+
+  // —— 健康检查/底部磁贴已按需求移除 ——
 
   if (!currentDeviceId) {
     return (
@@ -181,203 +178,198 @@ export default function DeviceInfoPage() {
   const storagePercent = storage.totalBytes && storage.usedBytes
     ? Math.round((storage.usedBytes / storage.totalBytes) * 100)
     : 0;
-  const displayName =
-    `${detail.brand ? detail.brand.charAt(0).toUpperCase() + detail.brand.slice(1) : ''} ${detail.model ?? ''}`.trim();
+  // 注意：截图里的"电池寿命百分比"是健康度（FCC/Design），ADB 拿到的 `health` 是字符串
+  // （Good/Overheat/...），没有数值。这里我们用电量当前百分比作为环形展示，避免误导。
+  const batteryPercent = Math.max(0, Math.min(100, battery.level ?? 0));
+
+  // 屏幕预览右键菜单
+  const screenMenu = [
+    { key: 'save', icon: <SaveOutlined />, label: '保存截图到本地…', disabled: !screenshot, onClick: saveScreenshot },
+    { key: 'copy', icon: <CopyOutlined />, label: '复制到剪贴板', disabled: !screenshot, onClick: copyScreenshot },
+    { type: 'divider' as const },
+    { key: 'refresh', icon: <CameraOutlined />, label: '重新截屏', onClick: refreshScreenshot },
+  ];
+
+  // mock 容器尺寸：
+  //  - 没有截图时给一个固定竖屏占位（200×356，≈ 9:16）
+  //  - 有截图时按真实宽高比自适应，限制在 240×420 的方框内等比缩放，
+  //    避免横屏截图在固定竖框里上下留黑
+  const MAX_W = 240;
+  const MAX_H = 420;
+  let mockW = 200;
+  let mockH = 356;
+  if (screenshot && imgSize) {
+    const ratio = imgSize.w / imgSize.h;
+    // 优先按高度铺满
+    let h = MAX_H;
+    let w = h * ratio;
+    if (w > MAX_W) {
+      w = MAX_W;
+      h = w / ratio;
+    }
+    mockW = Math.round(w);
+    mockH = Math.round(h);
+  }
 
   return (
     <div className="device-info-page">
-      {/* 顶部概览条 */}
-      <div className="di-header">
-        <div className="di-header-left">
-          <div className="di-device-name">{displayName || detail.deviceId}</div>
-          <div className="di-device-sub">
-            Android {detail.androidVersion ?? '?'} · SDK {detail.sdkVersion ?? '?'} · {detail.serialno}
-          </div>
-        </div>
-        <div className="di-header-right">
-          {fmtBytes(storage.totalBytes)}
-          <span className="di-battery">
-            <ThunderboltOutlined style={{ color: battery.isCharging ? '#52c41a' : '#faad14' }} />
-            {battery.level ?? '?'}%
+      {/* ============ 顶部操作条（电量 + 刷新） ============ */}
+      <div className="di-toolbar">
+        <span className={`di-battery-pill ${battery.isCharging ? 'is-charging' : ''}`}>
+          <ThunderboltOutlined />
+          <span className="di-battery-pill-text">
+            {battery.isCharging ? '充电中' : '使用中'}
           </span>
-          <Button icon={<SyncOutlined />} size="small" onClick={load} loading={loading}>刷新</Button>
-        </div>
+          <span className="di-battery-pill-level">{battery.level ?? '?'}%</span>
+        </span>
+        <Button icon={<SyncOutlined />} onClick={load} loading={loading}>刷新</Button>
       </div>
 
+      {/* ============ 主体三列 ============ */}
       <div className="di-body">
-        {/* 左侧：设备示意图 + 重启/关机 */}
-        <div className="di-left">
-          {(() => {
-            // UI 上 mock 始终保持竖向 180x320
-            const mockW = 180;
-            const mockH = 320;
-            // 当图片本身是横向时，旋转 -90° 让其在竖向 mock 内呈现
-            const needRotate = screenshot != null && imgIsLandscape === true;
-            const menuItems = [
-              {
-                key: 'save',
-                icon: <SaveOutlined />,
-                label: '保存截图到本地…',
-                disabled: !screenshot,
-                onClick: saveScreenshot,
-              },
-              {
-                key: 'copy',
-                icon: <CopyOutlined />,
-                label: '复制到剪贴板',
-                disabled: !screenshot,
-                onClick: copyScreenshot,
-              },
-              { type: 'divider' as const },
-              {
-                key: 'refresh',
-                icon: <CameraOutlined />,
-                label: '重新截屏',
-                onClick: refreshScreenshot,
-              },
-            ];
-            return (
-              <Dropdown menu={{ items: menuItems }} trigger={['contextMenu']}>
-                <div
-                  className="di-phone-mock"
-                  style={{ width: mockW, height: mockH }}
-                >
-                  {screenshot ? (
-                    <img
-                      src={`data:image/png;base64,${screenshot}`}
-                      alt="device screen"
-                      className="di-phone-screen"
-                      onLoad={(e) => {
-                        const img = e.currentTarget;
-                        setImgIsLandscape(img.naturalWidth > img.naturalHeight);
-                      }}
-                      style={
-                        needRotate
-                          ? {
-                              // 旋转前的 layout 宽高 = 容器的"高 × 宽"
-                              // 旋转 -90° 后视觉占满 180x320 容器
-                              width: mockH,
-                              height: mockW,
-                              position: 'absolute',
-                              top: '50%',
-                              left: '50%',
-                              transformOrigin: 'center center',
-                              transform: 'translate(-50%, -50%) rotate(-90deg)',
-                            }
-                          : undefined
-                      }
-                    />
-                  ) : shotLoading ? (
-                    <Spin />
-                  ) : (
-                    <>
-                      <MobileOutlined />
-                      <div className="di-phone-label">{detail.model ?? detail.deviceId}</div>
-                    </>
-                  )}
+        {/* —— 左：手机 mock + 操作按钮 —— */}
+        <div className="di-col-left">
+          <Dropdown menu={{ items: screenMenu }} trigger={['contextMenu']}>
+            <div className="di-phone-mock" style={{ width: mockW, height: mockH }}>
+              {screenshot ? (
+                <img
+                  src={`data:image/png;base64,${screenshot}`}
+                  alt="device screen"
+                  className="di-phone-screen"
+                  onLoad={(e) => {
+                    const img = e.currentTarget;
+                    setImgSize({ w: img.naturalWidth, h: img.naturalHeight });
+                  }}
+                />
+              ) : shotLoading ? (
+                <Spin />
+              ) : (
+                <div className="di-phone-placeholder">
+                  <MobileOutlined />
+                  <div className="di-phone-label">{detail.model ?? detail.deviceId}</div>
                 </div>
-              </Dropdown>
-            );
-          })()}
-          <div className="di-actions">
-            <Button
-              icon={<CameraOutlined />}
-              onClick={refreshScreenshot}
-              loading={shotLoading}
-            >
-              截屏
-            </Button>
+              )}
+            </div>
+          </Dropdown>
+
+          <div className="di-circle-actions">
             <Popconfirm title="确认重启设备？" onConfirm={onReboot}>
-              <Button icon={<ReloadOutlined />}>重启</Button>
+              <button className="di-circle-btn" type="button">
+                <ReloadOutlined />
+                <span>重启</span>
+              </button>
             </Popconfirm>
             <Popconfirm title="确认关机？" onConfirm={onPowerOff}>
-              <Button icon={<PoweroffOutlined />}>关机</Button>
+              <button className="di-circle-btn" type="button">
+                <PoweroffOutlined />
+                <span>关机</span>
+              </button>
             </Popconfirm>
-            <Button icon={<SyncOutlined />} onClick={load}>刷新</Button>
+            <button
+              className="di-circle-btn"
+              type="button"
+              onClick={refreshScreenshot}
+              disabled={shotLoading}
+            >
+              <CameraOutlined />
+              <span>截屏</span>
+            </button>
+          </div>
+
+          {/* 状态卡：电量 / 存储（移到截屏下方，与左列对齐） */}
+          <div className="di-stats">
+            <div className="di-card di-stat-card">
+              <div className="di-stat-text">
+                <div className="di-stat-title">
+                  电量 {battery.level ?? '-'}%
+                </div>
+                <div className="di-stat-sub">
+                  {battery.isCharging ? '充电中' : '未充电'}
+                  {battery.health ? ` · 健康 ${battery.health}` : ''}
+                </div>
+              </div>
+              <div className="di-stat-ring">
+                <Progress
+                  type="circle"
+                  percent={batteryPercent}
+                  size={64}
+                  strokeWidth={10}
+                  strokeColor={battery.isCharging ? '#22c55e' : '#16a34a'}
+                  trailColor="#e7f6ec"
+                  format={(p) => <span className="di-ring-text">{p}%</span>}
+                />
+              </div>
+            </div>
+
+            <div className="di-card di-stat-card">
+              <div className="di-stat-text">
+                <div className="di-stat-title">
+                  存储 {fmtBytes(storage.totalBytes)}
+                </div>
+                <div className="di-stat-sub">
+                  可用 {fmtBytes(storage.availableBytes)}
+                </div>
+              </div>
+              <div className="di-stat-ring">
+                <Progress
+                  type="circle"
+                  percent={storagePercent}
+                  size={64}
+                  strokeWidth={10}
+                  strokeColor="#f59e0b"
+                  trailColor="#fff4e0"
+                  format={(p) => <span className="di-ring-text">{p}%</span>}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* 中间：设备详情 */}
+        {/* —— 右：详情卡片 —— */}
         <div className="di-card di-details-card">
-          <InfoRow label="Android 版本" value={`${detail.androidVersion ?? '-'} (SDK ${detail.sdkVersion ?? '-'})`} />
-          <InfoRow label="安全补丁" value={detail.securityPatch} />
-          <InfoRow label="序列号" value={detail.serialno} />
-          <InfoRow label="品牌 / 厂商" value={`${detail.brand ?? '-'} / ${detail.manufacturer ?? '-'}`} />
-          <InfoRow label="型号" value={detail.model} />
-          <InfoRow label="内部代号" value={detail.product} />
-          <InfoRow label="CPU 架构" value={detail.cpuAbi} />
-          <InfoRow label="CPU 硬件" value={
-            [detail.cpuHardware, detail.socModel].filter(Boolean).join(' / ') || undefined
-          } />
-          <InfoRow label="内存" value={
-            detail.memory?.totalBytes != null
-              ? `${fmtBytes(detail.memory.totalBytes)}${
-                  detail.memory.availableBytes != null
-                    ? `（可用 ${fmtBytes(detail.memory.availableBytes)}）`
-                    : ''
-                }`
+          <DetailRow label="系统版本" value={
+            detail.androidVersion
+              ? `Android ${detail.androidVersion}${detail.sdkVersion ? ` (API ${detail.sdkVersion})` : ''}`
               : undefined
           } />
-          <InfoRow label="屏幕" value={
+          <DetailRow label="序列号" value={detail.serialno} mono />
+          <DetailRow label="设备 ID" value={detail.deviceId} mono />
+          <DetailRow label="品牌 / 厂商" value={
+            [detail.brand, detail.manufacturer].filter(Boolean).join(' / ') || undefined
+          } />
+          <DetailRow label="型号" value={detail.model} />
+          <DetailRow label="内部代号" value={detail.product} />
+          <DetailRow label="CPU 架构" value={detail.cpuAbi} />
+          <DetailRow label="CPU / SoC" value={
+            [detail.cpuHardware, detail.socModel].filter(Boolean).join(' · ') || undefined
+          } />
+          <DetailRow label="屏幕" value={
             detail.screenResolution
               ? `${detail.screenResolution}${detail.screenDensity ? ` @ ${detail.screenDensity} dpi` : ''}`
               : undefined
           } />
-          <InfoRow label="Bootloader" value={detail.bootloader} />
-          <InfoRow label="Root 状态"
-            value={
-              detail.rootStatus === 'rooted'
-                ? '已 Root'
-                : detail.rootStatus === 'not-rooted' ? '未 Root' : '未知'
-            }
-          />
-          <InfoRow label="地区" value={detail.region} />
-          <InfoRow label="构建版本" value={detail.buildNumber} />
-          <InfoRow label="构建日期" value={detail.buildDate} />
-        </div>
-
-        {/* 右侧：电池 + 存储 */}
-        <div className="di-right">
-          <div className="di-card di-battery-card">
-            <div className="di-card-title">电池</div>
-            <div className="di-ring">
-              <Progress
-                type="circle"
-                percent={battery.level ?? 0}
-                size={100}
-                strokeColor={battery.isCharging ? '#52c41a' : '#1677ff'}
-              />
-            </div>
-            <InfoRow label="状态" value={battery.status} />
-            <InfoRow label="健康" value={battery.health} />
-            <InfoRow label="温度" value={battery.temperature != null ? `${battery.temperature.toFixed(1)}°C` : undefined} />
-          </div>
-
-          <div className="di-card di-storage-card">
-            <div className="di-card-title">存储 (/data)</div>
-            <div className="di-ring">
-              <Progress
-                type="circle"
-                percent={storagePercent}
-                size={100}
-                strokeColor="#faad14"
-              />
-            </div>
-            <InfoRow label="总容量" value={fmtBytes(storage.totalBytes)} />
-            <InfoRow label="已使用" value={fmtBytes(storage.usedBytes)} />
-            <InfoRow label="剩余" value={fmtBytes(storage.availableBytes)} />
-          </div>
+          <DetailRow label="安全补丁" value={detail.securityPatch} />
+          <DetailRow label="构建版本" value={detail.buildNumber} mono />
+          <DetailRow label="Bootloader" value={detail.bootloader} mono />
+          <DetailRow label="Root 状态" value={
+            detail.rootStatus === 'rooted'
+              ? '已 Root'
+              : detail.rootStatus === 'not-rooted' ? '未 Root' : '未知'
+          } />
+          <DetailRow label="地区" value={detail.region} />
+          <DetailRow label="构建日期" value={detail.buildDate} />
         </div>
       </div>
     </div>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value?: string | number }) {
+/** 详情卡片中的一行键值 */
+function DetailRow({ label, value, mono }: { label: string; value?: string | number; mono?: boolean }) {
   return (
-    <div className="di-row">
-      <span className="di-row-label">{label}</span>
-      <span className="di-row-value">{value ?? '-'}</span>
+    <div className="di-detail-row">
+      <span className="di-detail-label">{label}</span>
+      <span className={`di-detail-value${mono ? ' is-mono' : ''}`}>{value ?? '-'}</span>
     </div>
   );
 }

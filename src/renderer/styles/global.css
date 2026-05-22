@@ -383,147 +383,343 @@ html, body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #f5f7fa;
+  background: #f3f5f9;
   overflow: auto;
-  padding: 20px;
+  padding: 20px 24px 24px;
   gap: 16px;
 }
 
-.di-header {
-  background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
+/* ---- 顶部摘要条 ---- */
+.di-toolbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 4px;
 }
-.di-header-left .di-device-name {
-  font-size: 18px;
-  font-weight: 600;
-  color: #1f1f1f;
-}
-.di-header-left .di-device-sub {
-  font-size: 12px;
-  color: #8c8c8c;
-  margin-top: 2px;
-}
-.di-header-right {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  color: #595959;
-  font-size: 13px;
-}
-.di-battery {
+.di-battery-pill {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 13px;
+  background: #e6f7ed;
+  color: #16a34a;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid #c8efd5;
+}
+.di-battery-pill.is-charging {
+  background: #ecfdf5;
+  color: #15803d;
+}
+.di-battery-pill .di-battery-pill-text {
+  color: inherit;
+}
+.di-battery-pill .di-battery-pill-level {
+  background: #fff;
+  color: #15803d;
+  padding: 0 6px;
+  border-radius: 9px;
+  font-weight: 600;
 }
 
+/* ---- 主体三列 ---- */
 .di-body {
   flex: 1;
   display: grid;
-  grid-template-columns: 260px 1fr 280px;
+  grid-template-columns: 300px 1fr;
   gap: 16px;
   min-height: 0;
 }
 
-.di-left {
-  background: #fff;
-  border-radius: 8px;
-  padding: 20px 16px;
+/* 左：设备 mock + 圆形动作按钮 */
+.di-col-left {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  gap: 18px;
+  padding-top: 8px; /* 与右侧详情卡 padding-top 对齐 */
+  min-height: 0;
+}
+.di-stats {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: auto; /* 把状态卡推到列底，与详情卡底部对齐 */
 }
 .di-phone-mock {
-  width: 180px;
-  height: 320px;
-  border-radius: 0;
-  background: linear-gradient(135deg, #eef4ff 0%, #dce7ff 100%);
+  position: relative;
+  border-radius: 18px;
+  background: #f3f5f9;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.12);
+  overflow: hidden;
+}
+.di-phone-mock > .ant-spin {
+  margin: auto;
+}
+.di-phone-mock .di-phone-placeholder {
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(135deg, #1f2937 0%, #0f172a 100%);
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  color: #1677ff;
-  font-size: 64px;
-  box-shadow: inset 0 0 0 4px #fff, 0 2px 8px rgba(22, 119, 255, 0.15);
-  overflow: hidden;
-  position: relative;
+  color: #94a3b8;
+  font-size: 56px;
+  gap: 12px;
 }
 .di-phone-mock .di-phone-label {
-  font-size: 13px;
-  color: #4a4a4a;
-  font-weight: 500;
+  font-size: 12px;
+  color: #cbd5e1;
 }
 .di-phone-screen {
   width: 100%;
   height: 100%;
-  object-fit: contain;
-  background: #000;
+  object-fit: cover;
   display: block;
 }
-.di-actions {
+
+.di-circle-actions {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 22px;
+  margin-top: 4px;
+}
+.di-circle-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  color: #595959;
+  font-size: 12px;
+  padding: 0;
+}
+.di-circle-btn .anticon {
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #fff;
+  color: #1677ff;
+  font-size: 18px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 0 0 1px #e6e8ee;
+  transition: box-shadow 0.15s, transform 0.15s;
+}
+.di-circle-btn:hover:not(:disabled) .anticon {
+  box-shadow: 0 4px 10px rgba(22, 119, 255, 0.18), 0 0 0 1px #b6d4ff;
+  transform: translateY(-1px);
+}
+.di-circle-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
+/* 通用卡片 */
 .di-card {
   background: #fff;
-  border-radius: 8px;
-  padding: 16px 20px;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 1px #eef0f4;
 }
-.di-card-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: #1f1f1f;
-  margin-bottom: 12px;
-  padding-bottom: 8px;
-  border-bottom: 1px solid #f0f2f5;
-}
+
+/* 中间详情卡 */
 .di-details-card {
   overflow-y: auto;
-}
-
-.di-right {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  padding: 8px 18px 16px;
+  align-self: stretch; /* 与左列等高，便于底部对齐 */
 }
-.di-battery-card,
-.di-storage-card {
-  display: flex;
-  flex-direction: column;
-}
-.di-ring {
-  display: flex;
-  justify-content: center;
-  margin: 8px 0 16px;
-}
-
-.di-row {
+.di-detail-row {
   display: flex;
   justify-content: space-between;
-  padding: 6px 0;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 4px;
   font-size: 13px;
-  border-bottom: 1px dashed #f0f2f5;
+  border-bottom: 1px dashed #eef0f4;
 }
-.di-row:last-child { border-bottom: none; }
-.di-row-label {
+.di-detail-row:last-of-type { border-bottom: none; }
+.di-detail-label {
   color: #8c8c8c;
+  flex: 0 0 auto;
 }
-.di-row-value {
+.di-detail-value {
   color: #1f1f1f;
   text-align: right;
-  max-width: 60%;
   word-break: break-all;
+  max-width: 65%;
+}
+.di-detail-value.is-mono {
+  font-family: 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  letter-spacing: 0.2px;
+}
+
+/* 左列状态卡（电池 / 存储）：左文 + 右环 */
+.di-stat-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+}
+.di-stat-text {
+  flex: 1;
+  min-width: 0;
+}
+.di-stat-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f1f1f;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.di-stat-link {
+  color: #1677ff;
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+}
+.di-stat-link:hover { text-decoration: underline; }
+.di-stat-sub {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-top: 4px;
+}
+.di-stat-ring {
+  flex: 0 0 auto;
+}
+.di-ring-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1f1f1f;
+}
+
+/* 健康检查 */
+.di-health-card {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.di-health-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #ecfdf5;
+  color: #15803d;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+}
+.di-health-head-icon { color: #22c55e; font-size: 16px; }
+.di-health-list {
+  flex: 1;
+  overflow: auto;
+}
+.di-health-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 4px;
+  font-size: 13px;
+  border-bottom: 1px dashed #eef0f4;
+}
+.di-health-row:last-child { border-bottom: none; }
+.di-health-label { color: #595959; }
+.di-health-val {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 500;
+}
+.di-health-val.ok { color: #16a34a; }
+.di-health-val.warn { color: #f59e0b; }
+
+/* ---- 底部磁贴 ---- */
+.di-tiles {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px 14px;
+  background: #fff;
+  border-radius: 12px;
+  padding: 14px 18px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 0 0 1px #eef0f4;
+}
+.di-tile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: default;
+  transition: background 0.15s;
+}
+.di-tile.is-clickable { cursor: pointer; }
+.di-tile.is-clickable:hover { background: #f3f5f9; }
+.di-tile.is-disabled { opacity: 0.5; cursor: not-allowed; }
+.di-tile:disabled { cursor: not-allowed; }
+.di-tile-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #f3f5f9;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+.di-tile-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.di-tile-label {
+  font-size: 13px;
+  color: #1f1f1f;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.di-tile-sub {
+  font-size: 11px;
+  color: #8c8c8c;
+  margin-top: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 窄屏适配 */
+@media (max-width: 1280px) {
+  .di-body {
+    grid-template-columns: 280px 1fr;
+  }
+  .di-tiles { grid-template-columns: repeat(3, 1fr); }
+}
+@media (max-width: 1080px) {
+  .di-body { grid-template-columns: 1fr; }
+  .di-tiles { grid-template-columns: repeat(2, 1fr); }
 }
 
 /* ====================== 拖拽安装遮罩 ====================== */
