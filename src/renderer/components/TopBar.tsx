@@ -10,7 +10,7 @@ export default function TopBar() {
         <div className="logo-icon">
           <img src={logoUrl} alt="" />
         </div>
-        手机助手
+        android-toolbox
       </div>
 
       {/* 中间留空（保留拖拽区域） */}

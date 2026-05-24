@@ -1,4 +1,4 @@
-# Android Toolbox · 手机助手
+# android-toolbox
 
 > 一款无需敲命令的 Android 设备管理工具。基于 Electron + adbkit 构建，开箱即用。
 
@@ -20,7 +20,7 @@
 
 ## 下载
 
-前往 [Releases](../../releases) 页面下载最新版本的 `手机助手 Setup x.x.x.exe`。
+前往 [Releases](../../releases) 页面下载最新版本的 `android-toolbox Setup x.x.x.exe`。
 
 **目前仅提供 Windows 版本**。macOS / Linux 支持在路线图中。
 

@@ -1,6 +1,6 @@
 {
   "name": "android-toolbox",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "description": "无需敲命令的 Android 设备管理工具：设备详情 / 应用管理 / APK 安装 / 截图 / 相册",
   "main": "dist-electron/main/index.js",
   "author": "tnqiang",
@@ -44,8 +44,8 @@
     "vite-plugin-electron-renderer": "^0.14.6"
   },
   "build": {
-    "appId": "com.mobilehelper.app",
-    "productName": "手机助手",
+    "appId": "com.tnqiang.android-toolbox",
+    "productName": "android-toolbox",
     "directories": {
       "output": "release/v${version}"
     },
@@ -83,7 +83,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "手机助手"
+      "shortcutName": "android-toolbox"
     },
     "fileAssociations": [
       {

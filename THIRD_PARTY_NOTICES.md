@@ -43,4 +43,4 @@ You may obtain a copy of the License at
 ## 商标说明
 
 - "Android" 是 Google LLC 的商标。本项目与 Google 无任何关联，仅为面向 Android 用户的第三方工具。
-- 应用名称 "手机助手" 仅为本项目的中文显示名，与任何同名商业产品无关联。
+- 应用名称 "android-toolbox" 与任何同名商业产品无关联。

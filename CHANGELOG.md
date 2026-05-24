@@ -2,6 +2,18 @@
 
 本项目所有显著变更都会记录在此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.4] - 2026-05
+
+### Changed
+- 产品名由"手机助手"改为 `android-toolbox`，更国际化
+  - 安装包文件名：`android-toolbox Setup x.x.x.exe`
+  - 桌面 / 开始菜单快捷方式：`android-toolbox`
+  - 应用窗口标题、TopBar 显示文字
+  - 缓存目录从 `%APPDATA%\手机助手\` 迁移到 `%APPDATA%\android-toolbox\`（旧目录数据保留，可手动删除）
+- 应用唯一标识 `appId` 由 `com.mobilehelper.app` 改为 `com.tnqiang.android-toolbox`
+  - ⚠️ 由 0.5.3 升级到 0.5.4 时，Windows 会将其视作两个不同应用，**旧版不会自动卸载**
+  - 建议先卸载 0.5.3，再安装 0.5.4；或在控制面板里手动卸载残留的旧版
+
 ## [0.5.3] - 2026-05
 
 ### Fixed

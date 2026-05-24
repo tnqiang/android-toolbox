@@ -117,7 +117,7 @@ async function createWindow() {
     height: 920,
     minWidth: 1100,
     minHeight: 800,
-    title: '手机助手',
+    title: 'android-toolbox',
     backgroundColor: '#f5f7fa',
     show: false,
     frame: false,            // 移除原生标题栏
