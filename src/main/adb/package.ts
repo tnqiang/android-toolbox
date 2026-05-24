@@ -167,7 +167,7 @@ function isOemPkg(pkg: string): boolean {
  * 三分类规则（优先级从上到下）：
  *   1) 命中 OEM 厂商前缀 且 不是 Android 核心包         → vendor
  *      （即使 OTA 升级版被挪到了 /data/app/，pm -s 不再认它，
- *        也仍归为厂商应用——因为 com.coloros.*/com.oplus.* 等命名空间不会被第三方使用）
+ *        也仍归为厂商应用——因为 com.coloros.* / com.oplus.* 等命名空间不会被第三方使用）
  *   2) 在系统分区（pm -s 命中 或 apkPath 不在 /data/app/）：
  *        - 有桌面入口 且 不是核心包 → vendor
  *        - 其它                     → system

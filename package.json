@@ -1,6 +1,6 @@
 {
   "name": "android-toolbox",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "description": "无需敲命令的 Android 设备管理工具：设备详情 / 应用管理 / APK 安装 / 截图 / 相册",
   "main": "dist-electron/main/index.js",
   "author": "tnqiang",

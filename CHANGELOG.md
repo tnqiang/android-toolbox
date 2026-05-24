@@ -2,6 +2,14 @@
 
 本项目所有显著变更都会记录在此文件。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)，版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.5.5] - 2026-05
+
+### Added
+- 应用列表新增"OEM 厂商"分类：从原"系统应用"中拆分出设备厂商预装应用单独成组，三类（用户应用 / OEM 厂商 / 系统应用）一目了然
+
+### Changed
+- 应用图标更新做优先级处理，避免列表刷新时图标抖动 / 错位
+
 ## [0.5.4] - 2026-05
 
 ### Changed
