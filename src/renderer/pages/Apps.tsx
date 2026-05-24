@@ -5,13 +5,13 @@ import {
 import type { MenuProps } from 'antd';
 import {
   ImportOutlined, DeleteOutlined, ReloadOutlined,
-  SearchOutlined,
+  SearchOutlined, ClearOutlined,
 } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import { useAppStore } from '../store/useAppStore';
 import { useTaskStore } from '../store/useTaskStore';
 import FileBrowserDrawer from '../components/FileBrowserDrawer';
-import type { AppCategory, AppInfo } from '@shared/types';
+import type { AppCategory, AppInfo, AppKind } from '@shared/types';
 
 /** 字节数格式化 */
 function fmtSize(n?: number): string {
@@ -33,6 +33,11 @@ function pkgInitial(pkg: string) {
   const m = (pkg.split('.').pop() || pkg).match(/[a-zA-Z\u4e00-\u9fa5]/);
   return (m?.[0] ?? '?').toUpperCase();
 }
+
+/** 综合活跃度评分：设备启动次数 0.6 + PC 交互 ×8×0.4
+ *  提到组件外，避免每次渲染重建后污染 useCallback 依赖。 */
+const calcScore = (a: AppInfo) =>
+  (a.deviceUseCount ?? 0) * 0.6 + (a.pcInteractCount ?? 0) * 8 * 0.4;
 
 export default function AppsPage() {
   const currentDeviceId = useAppStore((s) => s.currentDeviceId);
@@ -217,6 +222,10 @@ export default function AppsPage() {
     [],
   );
 
+  // 防止 StrictMode 或父组件重复触发：同一设备 ID 只 refresh 一次
+  // （提前到这里声明，下面 onClearLocalData 需要在"强制重刷"时清掉它）
+  const lastRefreshedDeviceRef = useRef<string | null>(null);
+
   const refresh = useCallback(async () => {
     if (!currentDeviceId) {
       setApps([]);
@@ -224,16 +233,56 @@ export default function AppsPage() {
     }
     setLoading(true);
     try {
-      // 一次性拉所有应用（系统+用户），前端按 isSystem 分类
+      // 一次性拉所有应用（系统+用户），前端按 appKind 分类
       const r = await window.api.listApps(currentDeviceId, 'all');
       if (!r.ok) {
         message.error(`获取应用列表失败：${r.error}`);
         setApps([]);
         return;
       }
-      const list = (r.data ?? []).sort((a, b) =>
-        a.packageName.localeCompare(b.packageName)
-      );
+      const rawList = r.data ?? [];
+
+      // ---- 先拿使用频率/装机时间（耗时通常很短，几十~一两百 ms）----
+      // 这样下面的"按 user > vendor > system + 频率"排序就能用到这些数据，
+      // 后续 meta/detail 后台拉取顺序也会跟着对：用户最关心的 app 最先出图标/名字。
+      const [devResp, pcResp, instResp] = await Promise.all([
+        window.api.getDeviceAppUsage(currentDeviceId),
+        window.api.getPcInteractScores(),
+        window.api.getPcInstallTimes(),
+      ]);
+      const devMap = devResp.ok && devResp.data ? devResp.data : {};
+      const pcMap = pcResp.ok && pcResp.data ? pcResp.data : {};
+      const instMap = instResp.ok && instResp.data ? instResp.data : {};
+
+      // 合并使用频率到原始列表
+      const withUsage: AppInfo[] = rawList.map((a) => ({
+        ...a,
+        deviceUseCount: devMap[a.packageName] ?? a.deviceUseCount,
+        pcInteractCount: pcMap[a.packageName] ?? a.pcInteractCount,
+        pcInstallAt: instMap[a.packageName] ?? a.pcInstallAt,
+      }));
+
+      // ---- 关键：按 user > vendor > system 排，组内按使用频率倒序 ----
+      // 这个顺序同时决定了：
+      //   1) 表格的初始展示顺序（filtered 里的 sort 跟它一致，不会跳动）
+      //   2) 下面 meta/detail 后台顺序拉取的顺序 → 用户优先看到图标
+      const kindRank = (a: AppInfo): number => {
+        const k = a.appKind ?? (a.isSystem ? 'system' : 'user');
+        return k === 'user' ? 0 : k === 'vendor' ? 1 : 2;
+      };
+      const list = [...withUsage].sort((a, b) => {
+        const ka = kindRank(a);
+        const kb = kindRank(b);
+        if (ka !== kb) return ka - kb;
+        // 组内：本次刚装的最靠前，然后是综合活跃度
+        const ta = a.pcInstallAt ?? 0;
+        const tb = b.pcInstallAt ?? 0;
+        if (ta !== tb) return tb - ta;
+        const sb = calcScore(b);
+        const sa = calcScore(a);
+        if (sb !== sa) return sb - sa;
+        return a.packageName.localeCompare(b.packageName);
+      });
 
       // ----- 关键优化：先批量读取所有缓存命中的 detail + meta（仅 2 次 IPC）-----
       const tBatch = performance.now();
@@ -272,7 +321,9 @@ export default function AppsPage() {
       setApps(enriched);
       setLoading(false);
 
-      // 后台单个 IPC 补未命中的 detail / meta（只处理缓存未命中的）
+      // 后台单个 IPC 补未命中的 detail / meta
+      // ⚠️ 注意：detailMisses / metaMisses 必须保持 enriched 的顺序，
+      // 这样后台的"顺序低并发"才会按"用户应用优先 → 厂商应用 → 系统应用"的顺序处理。
       const detailMisses = enriched.filter((a) => !detailMap.has(a.packageName));
       const metaMisses = enriched.filter((a) => !metaMap.has(a.packageName));
       if (detailMisses.length > 0) loadDetailsBackground(currentDeviceId, detailMisses);
@@ -290,25 +341,6 @@ export default function AppsPage() {
           }),
         }));
       });
-
-      // 后台拉取使用频率：设备端 + PC 端 + PC 端安装时间（合并到 store）
-      Promise.all([
-        window.api.getDeviceAppUsage(currentDeviceId),
-        window.api.getPcInteractScores(),
-        window.api.getPcInstallTimes(),
-      ]).then(([devResp, pcResp, instResp]) => {
-        const devMap = devResp.ok && devResp.data ? devResp.data : {};
-        const pcMap = pcResp.ok && pcResp.data ? pcResp.data : {};
-        const instMap = instResp.ok && instResp.data ? instResp.data : {};
-        useAppStore.setState((s) => ({
-          apps: s.apps.map((a) => ({
-            ...a,
-            deviceUseCount: devMap[a.packageName] ?? a.deviceUseCount,
-            pcInteractCount: pcMap[a.packageName] ?? a.pcInteractCount,
-            pcInstallAt: instMap[a.packageName] ?? a.pcInstallAt,
-          })),
-        }));
-      });
     } catch (e) {
       // eslint-disable-next-line no-console
       console.error('[ui] refresh error', e);
@@ -316,8 +348,33 @@ export default function AppsPage() {
     }
   }, [currentDeviceId, setApps, setLoading, message, loadMetaSequential, loadDetailsBackground]);
 
+  /**
+   * 临时调试按钮：清空本地所有缓存（meta/detail/PC 交互统计）后立即重刷
+   * 用来验证"首次进入"时应用列表的初始化顺序与速度
+   */
+  const onClearLocalData = useCallback(async () => {
+    try {
+      // 立即把内存里的列表清掉，让用户直观看到"从零开始"
+      setApps([]);
+      setLoading(true);
+      const r = await window.api.clearLocalData();
+      if (!r.ok) {
+        message.error(`清空本地缓存失败：${r.error}`);
+        setLoading(false);
+        return;
+      }
+      message.success(`已清空本地缓存（detail ${r.data?.detailCleared ?? 0} 项），开始重刷`);
+      // 强制让 refresh 重新执行一次（绕过"同一 device 不重刷"的 guard）
+      lastRefreshedDeviceRef.current = null;
+      await refresh();
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error('[ui] clearLocalData error', e);
+      setLoading(false);
+    }
+  }, [refresh, setApps, setLoading, message]);
+
   // 防止 StrictMode 或父组件重复触发：同一设备 ID 只 refresh 一次
-  const lastRefreshedDeviceRef = useRef<string | null>(null);
   useEffect(() => {
     if (currentDeviceId && lastRefreshedDeviceRef.current === currentDeviceId) {
       return;
@@ -334,14 +391,15 @@ export default function AppsPage() {
 
   // 搜索过滤
   // 先按 category 分流，再按关键字过滤
-  /** 综合活跃度评分：设备启动次数 0.6 + PC 交互 ×8×0.4 */
-  const calcScore = (a: AppInfo) =>
-    (a.deviceUseCount ?? 0) * 0.6 + (a.pcInteractCount ?? 0) * 8 * 0.4;
-
   const filtered = useMemo(() => {
     let arr = apps;
-    if (category === 'user') arr = arr.filter((a) => !a.isSystem);
-    else if (category === 'system') arr = arr.filter((a) => a.isSystem);
+    // 兼容老数据：没有 appKind 时根据 isSystem 推断为 system / user
+    const kindOf = (a: AppInfo): AppKind =>
+      a.appKind ?? (a.isSystem ? 'system' : 'user');
+
+    if (category === 'user') arr = arr.filter((a) => kindOf(a) === 'user');
+    else if (category === 'vendor') arr = arr.filter((a) => kindOf(a) === 'vendor');
+    else if (category === 'system') arr = arr.filter((a) => kindOf(a) === 'system');
 
     if (keyword.trim()) {
       const k = keyword.toLowerCase();
@@ -352,10 +410,18 @@ export default function AppsPage() {
       );
     }
     // 排序优先级：
+    // 0) 应用类别：用户 > 厂商 > 系统（仅在 category='all' 时生效；其它 tab 内类别一致）
     // 1) 本次 PC 上安装过的（pcInstallAt 有值）按安装时间倒序（最新装的最靠前）
     // 2) 其它应用按使用频率综合评分倒序
     // 3) 评分相同按名称
+    const kindRank = (a: AppInfo): number => {
+      const k = kindOf(a);
+      return k === 'user' ? 0 : k === 'vendor' ? 1 : 2;
+    };
     return [...arr].sort((a, b) => {
+      const ka = kindRank(a);
+      const kb = kindRank(b);
+      if (ka !== kb) return ka - kb;
       const ta = a.pcInstallAt ?? 0;
       const tb = b.pcInstallAt ?? 0;
       if (ta !== tb) return tb - ta;   // 有装机时间的天然排前，且新装的在前
@@ -557,11 +623,16 @@ export default function AppsPage() {
 
   // 各分类计数（用于 Tab 上的徽标）
   const counts = useMemo(() => {
-    return {
-      all: apps.length,
-      user: apps.filter((a) => !a.isSystem).length,
-      system: apps.filter((a) => a.isSystem).length,
-    };
+    const kindOf = (a: AppInfo): AppKind =>
+      a.appKind ?? (a.isSystem ? 'system' : 'user');
+    let user = 0, vendor = 0, system = 0;
+    for (const a of apps) {
+      const k = kindOf(a);
+      if (k === 'user') user++;
+      else if (k === 'vendor') vendor++;
+      else system++;
+    }
+    return { all: apps.length, user, vendor, system };
   }, [apps]);
 
   const columns: ColumnsType<AppInfo> = [
@@ -590,13 +661,14 @@ export default function AppsPage() {
     },
     {
       title: '类型',
-      dataIndex: 'isSystem',
       key: 'type',
       width: 100,
-      render: (v: boolean) =>
-        v
-          ? <span className="type-tag system">系统</span>
-          : <span className="type-tag user">用户</span>,
+      render: (_v, r) => {
+        const kind: AppKind = r.appKind ?? (r.isSystem ? 'system' : 'user');
+        if (kind === 'user') return <span className="type-tag user">用户</span>;
+        if (kind === 'vendor') return <span className="type-tag vendor">厂商</span>;
+        return <span className="type-tag system">系统</span>;
+      },
     },
     {
       title: '版本',
@@ -682,6 +754,12 @@ export default function AppsPage() {
           用户 <span className="cat-count">{counts.user}</span>
         </div>
         <div
+          className={`cat-tab ${category === 'vendor' ? 'active' : ''}`}
+          onClick={() => setCategory('vendor')}
+        >
+          厂商 <span className="cat-count">{counts.vendor}</span>
+        </div>
+        <div
           className={`cat-tab ${category === 'system' ? 'active' : ''}`}
           onClick={() => setCategory('system')}
         >
@@ -724,6 +802,19 @@ export default function AppsPage() {
         <span className="tb-btn" onClick={refresh}>
           <ReloadOutlined /> 刷新
         </span>
+
+        {/* 临时调试按钮：清空本地缓存以验证应用列表初始化流程 */}
+        <Popconfirm
+          title="清空本地缓存？"
+          description="将清空图标/名称/详情缓存与 PC 端使用频率，然后重新拉取列表。仅影响本机数据，不会改动设备。"
+          okText="清空并重刷"
+          cancelText="取消"
+          onConfirm={onClearLocalData}
+        >
+          <span className="tb-btn" title="清空本地缓存（调试用）">
+            <ClearOutlined /> 清缓存
+          </span>
+        </Popconfirm>
       </div>
 
       {/* 表格：外层 ref 测量高度，传给 Ant Table scroll.y 实现内部滚动 */}

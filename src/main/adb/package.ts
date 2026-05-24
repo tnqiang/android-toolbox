@@ -50,6 +50,22 @@ export function clearDetailCacheForPackage(packageName: string) {
   } catch { /* ignore */ }
 }
 
+/**
+ * 清空所有 detail 磁盘缓存（调试/验证用）
+ */
+export function clearAllDetailCache(): number {
+  ensureDetailCacheDir();
+  let n = 0;
+  try {
+    const files = readdirSync(DETAIL_CACHE_DIR);
+    for (const f of files) {
+      if (!f.endsWith('.json')) continue;
+      try { unlinkSync(join(DETAIL_CACHE_DIR, f)); n++; } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return n;
+}
+
 /** 给任意 Promise 包上超时（默认 15 秒） */
 function withTimeout<T>(p: PromiseLike<T>, ms = 15000, label = 'op'): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -109,9 +125,55 @@ async function readPackageBaseline(
   return { installed: true, versionCode, lastUpdateTime };
 }
 
+/** OEM 厂商包名前缀白名单（即使这些包没有 launcher 入口，也归为"厂商应用"） */
+const OEM_PREFIXES: string[] = [
+  // 一加 / OPPO / ColorOS / 欢太 / Realme
+  'com.oneplus.', 'com.oppo.', 'com.coloros.', 'com.oplus.', 'com.heytap.', 'com.realme.',
+  // 小米 / MIUI
+  'com.miui.', 'com.xiaomi.', 'com.mi.',
+  // 华为 / 荣耀
+  'com.huawei.', 'com.hihonor.', 'com.honor.',
+  // vivo / iQOO
+  'com.vivo.', 'com.bbk.', 'com.iqoo.',
+  // 三星
+  'com.samsung.', 'com.sec.android.',
+  // 其它常见
+  'com.meizu.', 'com.smartisan.', 'com.zte.',
+  'com.lenovo.', 'com.asus.', 'com.sony.',
+  'com.lge.', 'com.motorola.', 'com.tcl.',
+];
+
+/** 判断是否 Android / Google 核心包（这些即使在系统分区，也保留"系统应用"分类） */
+function isAndroidCorePkg(pkg: string): boolean {
+  if (pkg === 'android') return true;
+  if (pkg.startsWith('com.android.')) return true;
+  if (pkg.startsWith('com.google.android.gms')) return true;
+  if (pkg.startsWith('com.google.android.gsf')) return true;
+  // Google 自家的预装应用（Gmail / Maps 等）严格说也不算"厂商"，归系统更稳妥
+  if (pkg.startsWith('com.google.android.')) return true;
+  return false;
+}
+
+function isOemPkg(pkg: string): boolean {
+  for (const p of OEM_PREFIXES) {
+    if (pkg.startsWith(p)) return true;
+  }
+  return false;
+}
+
 /**
- * 列出已安装应用（一次性拉全部，同时拿到系统应用名单，前端再按 isSystem 分类）
- *  -f 含 APK 路径  -s 仅系统（用来准确判定 isSystem）
+ * 列出已安装应用（一次性拉全部，同时拿到系统应用名单 + launcher 入口名单）
+ *
+ * 三分类规则（优先级从上到下）：
+ *   1) 命中 OEM 厂商前缀 且 不是 Android 核心包         → vendor
+ *      （即使 OTA 升级版被挪到了 /data/app/，pm -s 不再认它，
+ *        也仍归为厂商应用——因为 com.coloros.*/com.oplus.* 等命名空间不会被第三方使用）
+ *   2) 在系统分区（pm -s 命中 或 apkPath 不在 /data/app/）：
+ *        - 有桌面入口 且 不是核心包 → vendor
+ *        - 其它                     → system
+ *   3) 其它                                              → user
+ *
+ * 兼容字段 isSystem 保留为 (appKind !== 'user')，避免破坏旧调用方。
  */
 export async function listApps(
   deviceId: string,
@@ -119,7 +181,8 @@ export async function listApps(
 ): Promise<AppInfo[]> {
   // 1) 全部应用
   const allOut = await shellExec(deviceId, 'pm list packages -f');
-  // 2) 系统应用（独立查询）
+
+  // 2) 系统应用名单
   let systemSet = new Set<string>();
   try {
     const sysOut = await shellExec(deviceId, 'pm list packages -s');
@@ -131,6 +194,44 @@ export async function listApps(
     );
   } catch { /* ignore */ }
 
+  // 3) 有桌面入口的包名集合（cmd package > Android 7+；老系统降级用 pm dump 不太可靠，失败就空集）
+  //    输出形如：
+  //      <packageName>/<.MainActivity>
+  //      或多行 ResolveInfo 结构里包含 packageName=...
+  let launcherSet = new Set<string>();
+  try {
+    // -a + -c 过滤 main/launcher，--components 输出紧凑的 包/类 结构
+    const lOut = await shellExec(
+      deviceId,
+      'cmd package query-activities --components -a android.intent.action.MAIN -c android.intent.category.LAUNCHER',
+      8000,
+    );
+    if (lOut) {
+      for (const line of lOut.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t) continue;
+        // 匹配 "com.foo.bar/.SomeActivity" 中的 packageName 部分
+        const m = t.match(/^([a-zA-Z][a-zA-Z0-9_.]+)\//);
+        if (m) launcherSet.add(m[1]);
+      }
+    }
+    // 兜底：老设备没有 cmd package 时，再试一次 pm 命令（输出格式相同）
+    if (launcherSet.size === 0) {
+      const lOut2 = await shellExec(
+        deviceId,
+        'pm query-activities --components -a android.intent.action.MAIN -c android.intent.category.LAUNCHER',
+        8000,
+      );
+      if (lOut2) {
+        for (const line of lOut2.split(/\r?\n/)) {
+          const t = line.trim();
+          const m = t.match(/^([a-zA-Z][a-zA-Z0-9_.]+)\//);
+          if (m) launcherSet.add(m[1]);
+        }
+      }
+    }
+  } catch { /* ignore，老设备拿不到就当空 */ }
+
   const apps: AppInfo[] = [];
   for (const line of allOut.split(/\r?\n/)) {
     // 形如：package:/data/app/~~xxx==/com.example-xxx/base.apk=com.example
@@ -138,12 +239,30 @@ export async function listApps(
     if (!m) continue;
     const apkPath = m[1];
     const packageName = m[2];
-    // 优先以 pm list -s 的结果判定；fallback 用路径判定
-    const isSystem = systemSet.has(packageName) || !apkPath.startsWith('/data/app/');
+
+    const inSystemPartition = systemSet.has(packageName) || !apkPath.startsWith('/data/app/');
+    const hasLauncher = launcherSet.has(packageName);
+    const isOem = isOemPkg(packageName);
+    const isCore = isAndroidCorePkg(packageName);
+
+    let appKind: 'user' | 'system' | 'vendor';
+    if (isOem && !isCore) {
+      // OEM 厂商命名空间——无论装在哪个分区都判为 vendor
+      // （应对 ColorOS / MIUI 等把出厂应用 OTA 升级后挪到 /data/app/ 的情况）
+      appKind = 'vendor';
+    } else if (!inSystemPartition) {
+      appKind = 'user';
+    } else if (hasLauncher && !isCore) {
+      appKind = 'vendor';
+    } else {
+      appKind = 'system';
+    }
+
     apps.push({
       packageName,
       apkPath,
-      isSystem,
+      appKind,
+      isSystem: appKind !== 'user',
     });
   }
   return apps;

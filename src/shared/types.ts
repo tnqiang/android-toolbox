@@ -26,7 +26,15 @@ export interface AppInfo {
   apkPath?: string;          // APK 在设备上的路径
   apkSize?: number;          // APK 大小（字节）
   dataSize?: number;         // 文档/数据大小（字节）
-  isSystem: boolean;         // 是否系统应用
+  /**
+   * 应用分类：
+   *  - user   普通用户应用（装在 /data/app）
+   *  - vendor 厂商预装应用（装在系统分区且具备桌面入口或命中 OEM 包名前缀）
+   *  - system Android / Google 核心系统组件
+   */
+  appKind?: AppKind;
+  /** 兼容字段：appKind !== 'user' 即视为系统类（包括 vendor） */
+  isSystem: boolean;
   firstInstallTime?: number;
   lastUpdateTime?: number;
   iconBase64?: string;       // 图标 base64（按需加载）
@@ -36,8 +44,11 @@ export interface AppInfo {
   pcInstallAt?: number;      // PC 端最近一次安装时间戳（ms），用于置顶
 }
 
+/** 应用细分类型 */
+export type AppKind = 'user' | 'system' | 'vendor';
+
 /** 应用类别筛选 */
-export type AppCategory = 'all' | 'user' | 'system';
+export type AppCategory = 'all' | 'user' | 'system' | 'vendor';
 
 /** 远端文件/目录条目（文件浏览器用） */
 export interface RemoteEntry {
@@ -152,6 +163,9 @@ export const IpcChannels = {
   WIN_MINIMIZE: 'win:minimize',
   WIN_MAXIMIZE: 'win:maximize',   // 最大化/还原切换
   WIN_CLOSE: 'win:close',
+
+  // 调试/验证
+  DEV_CLEAR_LOCAL_DATA: 'dev:clearLocalData', // 清空本地缓存（meta/detail/PC 交互统计）
 } as const;
 
 export type IpcChannel = typeof IpcChannels[keyof typeof IpcChannels];

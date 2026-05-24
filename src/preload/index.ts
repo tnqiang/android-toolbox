@@ -264,6 +264,11 @@ const api = {
     ipcRenderer.on(IpcChannels.APK_OPEN_REQUEST, handler);
     return () => ipcRenderer.removeListener(IpcChannels.APK_OPEN_REQUEST, handler);
   },
+
+  // ---- 调试/验证 ----
+  /** 清空本地缓存（meta / detail / PC 交互统计），用于验证应用列表初始化流程 */
+  clearLocalData: (): Promise<IpcResult<{ detailCleared: number }>> =>
+    ipcRenderer.invoke(IpcChannels.DEV_CLEAR_LOCAL_DATA),
 };
 
 contextBridge.exposeInMainWorld('api', api);

@@ -163,3 +163,15 @@ export function getPcInstallTimes(): Record<string, number> {
   }
   return map;
 }
+
+/**
+ * 清空 PC 端所有交互统计（install/uninstall/export/view + lastAt）
+ * 用于调试/验证排序与初始化流程
+ */
+export function clearPcInteractStats(): void {
+  cache = {};
+  try {
+    mkdirSync(dirname(INTERACT_FILE), { recursive: true });
+    writeFileSync(INTERACT_FILE, JSON.stringify(cache));
+  } catch { /* ignore */ }
+}

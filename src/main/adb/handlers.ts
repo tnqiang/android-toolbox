@@ -5,10 +5,10 @@ import { ipcMain, BrowserWindow, dialog, shell } from 'electron';
 import { IpcChannels } from '../../shared/types';
 import type { AppCategory, IpcResult, MediaKind } from '../../shared/types';
 import { listDevices, trackDevices } from './device';
-import { listApps, getAppDetail, getAppDetailBatch, getAllAppDataSizes, installApk, uninstallApp, exportApk, clearDetailCacheForPackage } from './package';
-import { getAppMeta, getAppMetaBatch, precacheMetaFromLocalApk } from './meta';
+import { listApps, getAppDetail, getAppDetailBatch, getAllAppDataSizes, installApk, uninstallApp, exportApk, clearDetailCacheForPackage, clearAllDetailCache } from './package';
+import { getAppMeta, getAppMetaBatch, precacheMetaFromLocalApk, clearMetaCache } from './meta';
 import { getDeviceDetailInfo, rebootDevice, powerOffDevice, takeScreenshot } from './deviceInfo';
-import { getDeviceAppUsage, getPcInteractScores, getPcInstallTimes, recordInteract, type InteractKind } from './usage';
+import { getDeviceAppUsage, getPcInteractScores, getPcInstallTimes, recordInteract, clearPcInteractStats, type InteractKind } from './usage';
 import {
   listDir, listDirStreaming, pullFile, pushFile, mkdirRemote, removeRemote, renameRemote,
   probeRemote, joinRemote,
@@ -534,6 +534,27 @@ export function registerAdbHandlers(getWindow: () => BrowserWindow | null) {
       // Windows 下 showItemInFolder 需要反斜杠
       shell.showItemInFolder(p.replace(/\//g, process.platform === 'win32' ? '\\' : '/'));
       return ok(true);
+    } catch (e) {
+      return fail(e);
+    }
+  });
+
+  // ================== 调试/验证 ==================
+  /**
+   * 清空所有本地缓存：
+   *  - app-meta-cache（label/图标）
+   *  - app-detail-cache（versionName/versionCode/apkSize 等）
+   *  - interact-stats.json（PC 端交互统计 + 安装时间）
+   * 仅用于本地验证"应用列表初始化顺序/速度"，并不会改动设备上的数据。
+   */
+  ipcMain.handle(IpcChannels.DEV_CLEAR_LOCAL_DATA, async () => {
+    try {
+      clearMetaCache();
+      const detailCleared = clearAllDetailCache();
+      clearPcInteractStats();
+      // eslint-disable-next-line no-console
+      console.log(`[dev] cleared local data: meta + ${detailCleared} detail + interact-stats`);
+      return ok({ detailCleared });
     } catch (e) {
       return fail(e);
     }
