@@ -192,15 +192,19 @@ export default function DeviceInfoPage() {
 
   // mock 容器尺寸：
   //  - 没有截图时给一个固定竖屏占位（200×356，≈ 9:16）
-  //  - 有截图时按真实宽高比自适应，限制在 240×420 的方框内等比缩放，
-  //    避免横屏截图在固定竖框里上下留黑
+  //  - 有截图时按真实宽高比自适应，限制在 240×420 的方框内等比缩放
+  //  - 若截图本身是横屏（游戏横屏等），先把宽高交换再算缩放，
+  //    使 mock 外框始终是竖向矩形；图像通过 rotate(-90°) 回正
   const MAX_W = 240;
   const MAX_H = 420;
   let mockW = 200;
   let mockH = 356;
+  const isLandscape = !!(imgSize && imgSize.w > imgSize.h);
   if (screenshot && imgSize) {
-    const ratio = imgSize.w / imgSize.h;
-    // 优先按高度铺满
+    // 横屏时按"旋转后"的比例（高/宽）来铺
+    const effW = isLandscape ? imgSize.h : imgSize.w;
+    const effH = isLandscape ? imgSize.w : imgSize.h;
+    const ratio = effW / effH;
     let h = MAX_H;
     let w = h * ratio;
     if (w > MAX_W) {
@@ -210,6 +214,18 @@ export default function DeviceInfoPage() {
     mockW = Math.round(w);
     mockH = Math.round(h);
   }
+  // 横屏：内层 img 宽高与外框互换，再绕中心旋转 -90°
+  const screenStyle: React.CSSProperties = isLandscape
+    ? {
+        width: mockH,
+        height: mockW,
+        transform: 'translate(-50%, -50%) rotate(-90deg)',
+        position: 'absolute',
+        top: '50%',
+        left: '50%',
+        objectFit: 'cover',
+      }
+    : {};
 
   return (
     <div className="device-info-page">
@@ -236,6 +252,7 @@ export default function DeviceInfoPage() {
                   src={`data:image/png;base64,${screenshot}`}
                   alt="device screen"
                   className="di-phone-screen"
+                  style={screenStyle}
                   onLoad={(e) => {
                     const img = e.currentTarget;
                     setImgSize({ w: img.naturalWidth, h: img.naturalHeight });

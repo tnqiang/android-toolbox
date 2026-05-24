@@ -80,11 +80,13 @@ const inflight = new Map<string, Promise<AppMeta>>();
  *
  * 中文识别难点：APK 的 label 数组里，日文/韩文/繁中/简中都混在一起。
  * 策略：
- *  1) 剔除含假名/谚文的候选（排除日韩）
- *  2) 优先简体中文（常见简体字高频出现）
- *  3) 次选繁体中文
- *  4) 再次选纯英文
- *  5) 兜底取第一个非空字符串
+ *  1) 剔除含假名/谚文/其它非中英语种的候选
+ *  2) 剩下的"中文候选"按"简体程度"打分，优先选简体：
+ *       a. 含简体特征字（这些字繁体写法不同）→ 直接判定为简体
+ *       b. 不含繁体特征字（这些字简体写法不同）→ 视为简体（兜住"简繁同形"的短名）
+ *       c. 含繁体特征字 → 判为繁体，作为最后兜底
+ *  3) 没有中文则退回纯英文
+ *  4) 兜底取第一个非空字符串
  */
 // 包含日文假名
 const HAS_KANA = /[\u3040-\u309f\u30a0-\u30ff]/;
@@ -96,14 +98,24 @@ const HAS_NON_CHN = /[\u0590-\u07ff\u0e00-\u0fff\u1000-\u109f\u1780-\u17ff\u0900
 const HAS_HAN = /[\u4e00-\u9fff]/;
 
 /**
- * 判定字符串是否"含简体特征"。
- * 选了 ~250 个简体常用字（这些字的繁体写法不同），任意命中即视为简体。
+ * "简体特征字"：这些字在繁体里写法不同，出现即可视为简体。
  */
 const SIMPLIFIED_CHARS = new Set(
-  ('们个为这来发会还说么时国对样过门见话长几从应电气车马见买卖鱼号应级简点单写实让该选边学专办东两书厂车这开关门买卖记书师乐画问题写记业务请买价办风际报议结务转习极树东员军连传医历顶仅页齐众优传伦优级华双国图团尽队卫导寻当声异乱礼术况伦优倾偿储兄党办认讨议讨让记访讲许评请读议谁论调谊谈谅谓询谋诺谢谊谅赞谁课认设许讯诉调谋谁话语调诚训记访诉谁谋谓诧课诌请诰诵讥调诤诙诛话词试诗诡诱诲说诞诠该详诧谁课请说调诺谅诵').split('')
+  '们个为这来发会还说么时国对样过门见话长几从应电气车马号级简点单写实让该选边学专办东两书厂开关记师乐画问题业务请价风际报议结务转习极树员军连传医历顶仅页齐众优伦双图团尽队卫导寻当声异乱礼术况倾偿储兄党认讨让访讲许评读调谊谈谅谓询谋诺谢课设讯诉论训话语词试诗诱诲详听买卖鱼龙凤'.split('')
+);
+/**
+ * "繁体特征字"：这些字在简体里写法不同，简体名里几乎不会出现。
+ * 命中任意一个即视为繁体候选。
+ */
+const TRADITIONAL_CHARS = new Set(
+  '們個為這來發會還說麼時國對樣過門見話長幾從應電氣車馬號級簡點單寫實讓該選邊學專辦東兩書廠開關記師樂畫問題業務請價風際報議結務轉習極樹員軍連傳醫歷頂僅頁齊眾優倫雙圖團盡隊衛導尋當聲異亂禮術況傾償儲黨認討讓訪講許評讀調誼談諒謂詢謀諾謝課設訊訴論訓話語詞試詩誘誨詳聽買賣魚龍鳳臺灣戰績檔資訊裡讚靜壓'.split('')
 );
 function hasSimplifiedChar(s: string): boolean {
   for (const c of s) if (SIMPLIFIED_CHARS.has(c)) return true;
+  return false;
+}
+function hasTraditionalChar(s: string): boolean {
+  for (const c of s) if (TRADITIONAL_CHARS.has(c)) return true;
   return false;
 }
 
@@ -140,18 +152,22 @@ function pickLabel(info: any): string | undefined {
 
   const chineseCandidates = candidates.filter(isPureCJK);
 
-  // 1) 优先简体（含简体特征字符）
-  const zhCN = chineseCandidates.find(hasSimplifiedChar);
-  if (zhCN) return zhCN;
+  // 1) 含简体特征字符 → 简体（最稳）
+  const zhCNStrong = chineseCandidates.find(hasSimplifiedChar);
+  if (zhCNStrong) return zhCNStrong;
 
-  // 2) 任意中文（繁体）
+  // 2) 不含繁体特征字符 → 视作简体（兜住"简繁同形"的短名，比如 "微信"/"百度"/"抖音"）
+  const zhCNFallback = chineseCandidates.find((s) => !hasTraditionalChar(s));
+  if (zhCNFallback) return zhCNFallback;
+
+  // 3) 全是繁体 → 拿第一个
   if (chineseCandidates[0]) return chineseCandidates[0];
 
-  // 3) 纯英文
+  // 4) 纯英文
   const en = candidates.find((s) => /^[\x20-\x7e]+$/.test(s));
   if (en) return en;
 
-  // 4) 兜底
+  // 5) 兜底
   return candidates[0];
 }
 
@@ -303,10 +319,19 @@ export async function getAppMeta(
   }
 }
 
-/** 清除所有缓存（可作调试用途） */
+/** 清除所有缓存（调试 / 修复历史错乱的 label 时使用） */
 export function clearMetaCache() {
-  // 暴力做法：未实现 readdir，依赖每个 package 单独命中
-  // 后续如果需要，可以 fs.rmSync(CACHE_DIR, { recursive: true })
+  ensureDirs();
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+    const fs = require('fs');
+    const files: string[] = fs.readdirSync(CACHE_DIR);
+    for (const f of files) {
+      try { fs.unlinkSync(join(CACHE_DIR, f)); } catch { /* ignore */ }
+    }
+    // eslint-disable-next-line no-console
+    console.log(`[meta] cleared ${files.length} cache file(s)`);
+  } catch { /* ignore */ }
 }
 
 /**

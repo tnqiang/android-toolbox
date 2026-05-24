@@ -1,12 +1,24 @@
+# Dependencies
 node_modules
+
+# Build output
 dist
 dist-electron
 release
-.DS_Store
+*.tsbuildinfo
+
+# Logs
 *.log
+npm-debug.log*
+
+# Editor / IDE
 .vscode/
 .idea/
-resources/adb/
-docs/1.png
-docs/2.png
-docs/3.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local env
+.env
+.env.local

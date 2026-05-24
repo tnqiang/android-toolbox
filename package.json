@@ -1,10 +1,18 @@
 {
-  "name": "apk-install-helper",
-  "version": "0.5.2",
-  "description": "安卓 PC 装包助手 - 跨平台 APK 安装管理工具",
+  "name": "android-toolbox",
+  "version": "0.5.3",
+  "description": "无需敲命令的 Android 设备管理工具：设备详情 / 应用管理 / APK 安装 / 截图 / 相册",
   "main": "dist-electron/main/index.js",
-  "author": "ApkInstallHelper",
+  "author": "tnqiang",
   "license": "MIT",
+  "homepage": "https://github.com/tnqiang/android-toolbox",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tnqiang/android-toolbox.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tnqiang/android-toolbox/issues"
+  },
   "private": true,
   "scripts": {
     "dev": "vite",
